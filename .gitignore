@@ -1,0 +1,16 @@
+# Python
+__pycache__/
+*.py[cod]
+
+# Extraction / render artifacts
+*_extract/
+figures/
+text.txt
+manifest.json
+*.html
+
+# Translated papers are derivative works of copyrighted articles.
+# Keep them out of the repo.
+*中文翻译*
+*_figs/
+*.pdf
