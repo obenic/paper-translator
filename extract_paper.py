@@ -6,7 +6,7 @@ produces an incomplete translation that looks complete. This script
 extracts both, and cross-checks them against each other.
 
 Usage:
-    python extract_paper.py <pdf> [-o OUTDIR] [--dpi 200] [--pages 21-24]
+    python extract_paper.py <pdf> [-o OUTDIR] [--dpi 200] [--pages 21-24] [--ocr]
 
 Outputs into OUTDIR (default: <pdf_stem>_extract next to the PDF):
     text.txt          full text, one "===== PAGE n =====" marker per page
@@ -18,6 +18,12 @@ Figure detection covers three cases the text layer misses:
     - figures embedded in text  (raster image above area threshold)
     - vector-drawn charts       (invisible to get_images(); counted as
                                  drawing operations instead)
+
+Scanned PDFs (no text layer):
+    --ocr           Use PaddleOCR to extract text from rendered pages.
+                    Requires: pip install paddlepaddle paddleocr
+                    Without this flag, scanned PDFs produce empty text.txt
+                    and you must rely on multimodal model vision.
 
 Completeness check: the body text is scanned for figure references
 ("Fig. 3", "Figure 3"). If the paper references N figures, N figures
@@ -86,6 +92,63 @@ def parse_pages(spec, n_pages):
     return [p for p in sorted(set(out)) if 1 <= p <= n_pages]
 
 
+def make_ocr_engine(lang):
+    """Build a PaddleOCR engine, or exit with an actionable message.
+
+    Targets the PaddleOCR 3.x API (3.7.0 / paddlepaddle 3.3.1 tested). The
+    2.x keywords (use_angle_cls, show_log) no longer exist.
+
+    enable_mkldnn=False is required, not cosmetic: the oneDNN backend in
+    some paddlepaddle builds dies with
+      NotImplementedError: ConvertPirAttribute2RuntimeAttribute not support
+    before a single page is read. Turning it off costs a little speed and
+    makes OCR actually run.
+    """
+    try:
+        from paddleocr import PaddleOCR
+    except ImportError:
+        print("ERROR: PaddleOCR missing. Run:\n"
+              "    pip install paddlepaddle paddleocr", file=sys.stderr)
+        return None
+
+    try:
+        return PaddleOCR(
+            use_doc_orientation_classify=False,
+            use_doc_unwarping=False,
+            use_textline_orientation=False,
+            lang=lang,
+            enable_mkldnn=False,
+        )
+    except TypeError as e:
+        print(f"ERROR: PaddleOCR rejected these options ({e}).\n"
+              "This script targets PaddleOCR 3.x. Upgrade with:\n"
+              "    pip install -U paddleocr paddlepaddle", file=sys.stderr)
+        return None
+    except Exception as e:
+        print(f"ERROR: could not start PaddleOCR: {e}", file=sys.stderr)
+        return None
+
+
+def ocr_pixmap(engine, pix):
+    """OCR one rendered page. Returns recognized text, one line per box."""
+    import numpy as np
+
+    img = np.frombuffer(pix.samples, dtype=np.uint8).reshape(
+        pix.height, pix.width, pix.n)
+    if pix.n == 4:          # RGBA -> RGB
+        img = img[:, :, :3]
+    img = img[:, :, ::-1]   # RGB -> BGR, the OpenCV order PaddleOCR expects
+
+    try:
+        res = engine.predict(img)
+    except Exception as e:
+        print(f"    OCR failed on this page: {e}", file=sys.stderr)
+        return ""
+    if not res:
+        return ""
+    return "\n".join(res[0].get("rec_texts", []))
+
+
 def analyze(page):
     """Classify one page: how much text, how much figure."""
     text = page.get_text("text").strip()
@@ -136,6 +199,12 @@ def main():
     ap.add_argument("--max-width", type=int, default=1600,
                     help="cap rendered width in px, keeps files embeddable")
     ap.add_argument("--pages", help="render these pages regardless (e.g. 21-24)")
+    ap.add_argument("--ocr", action="store_true",
+                    help="OCR scanned pages with PaddleOCR "
+                         "(pip install paddlepaddle paddleocr)")
+    ap.add_argument("--ocr-lang", default="en",
+                    help="PaddleOCR language: en, ch, japan, korean, ... "
+                         "(default: en; use ch for Chinese-English mixed)")
     args = ap.parse_args()
 
     try:
@@ -157,6 +226,36 @@ def main():
     os.makedirs(fig_dir, exist_ok=True)
 
     pages = [analyze(p) for p in doc]
+    text_pages = sum(1 for p in pages if p["chars"] >= MIN_TEXT_CHARS)
+    scanned = text_pages == 0 and len(pages) > 0
+
+    # OCR pass. Only meaningful for a PDF with no text layer - a text PDF
+    # already has better text than OCR would produce.
+    ocr_used = False
+    if args.ocr:
+        if not scanned:
+            print(f"NOTE: --ocr ignored, this PDF already has a text layer "
+                  f"({text_pages} text pages).")
+        else:
+            engine = make_ocr_engine(args.ocr_lang)
+            if engine is None:
+                return 1
+            print(f"OCR: scanned PDF, reading {len(pages)} pages "
+                  f"(lang={args.ocr_lang}; first run downloads models)...")
+            for i, page in enumerate(doc):
+                zoom = args.dpi / 72.0
+                pix = page.get_pixmap(matrix=fitz.Matrix(zoom, zoom))
+                text = ocr_pixmap(engine, pix)
+                pages[i]["_text"] = text
+                pages[i]["chars"] = len(text)
+                print(f"  p{i + 1:>3}: {len(text)} chars")
+            text_pages = sum(1 for p in pages if p["chars"] >= MIN_TEXT_CHARS)
+            ocr_used = True
+            if text_pages == 0:
+                print("WARNING: OCR produced almost no text. The scan may be "
+                      "too low-resolution - retry with --dpi 300.")
+            scanned = False
+
     full_text = "\n".join(
         f"\n===== PAGE {i + 1} =====\n\n" + (p["_text"] or "[no text layer]")
         for i, p in enumerate(pages))
@@ -194,9 +293,6 @@ def main():
     counted = captions or referenced
     expected = max(counted) if counted else 0
 
-    text_pages = sum(1 for p in pages if p["chars"] >= MIN_TEXT_CHARS)
-    scanned = text_pages == 0 and len(pages) > 0
-
     consistent = expected == 0 or len(rendered) >= expected
     manifest = {
         "pdf": os.path.abspath(args.pdf),
@@ -204,6 +300,8 @@ def main():
         "pages": len(pages),
         "text_pages": text_pages,
         "is_scanned": scanned,
+        "ocr_used": ocr_used,
+        "ocr_lang": args.ocr_lang if ocr_used else None,
         "figures_referenced_in_text": sorted(counted),
         "figures_expected": expected,
         "figures_rendered": len(rendered),
@@ -219,7 +317,9 @@ def main():
     print(f"out         : {out_dir}")
     print(f"pages       : {len(pages)}  (text pages: {text_pages})")
     if scanned:
-        print("SCANNED     : no text layer anywhere - read figures/*.png visually")
+        print("SCANNED     : no text layer - use --ocr, or read figures/*.png visually")
+    if ocr_used:
+        print(f"OCR         : PaddleOCR (lang={args.ocr_lang})")
     print(f"text        : {text_path}")
     print(f"figures     : {len(rendered)} rendered -> {fig_dir}")
     for r in rendered:

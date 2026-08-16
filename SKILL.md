@@ -34,16 +34,35 @@ SK=~/.claude/skills/translating-papers
 python "$SK/extract_paper.py" "<pdf>" -o "<tmp_dir>"
 ```
 
+**扫描件处理：**
+
+脚本自动检测有无文本层。检测到扫描件（`text_pages: 0`）时两条路，选一条：
+
+| 方式 | 命令 | 前提 |
+|---|---|---|
+| **OCR 提取** | 加 `--ocr` | 已装 PaddleOCR |
+| **视觉识图** | 不加参数 | 当前模型能识图 |
+
+```bash
+python "$SK/extract_paper.py" "<pdf>" -o "<tmp_dir>" --ocr
+# 中英混排原件加 --ocr-lang ch；识别率低加 --dpi 300
+```
+
+`--ocr` 对文字型 PDF 会自动忽略（文本层本来就比 OCR 准），加了不会白跑。
+
 产出 `text.txt`、`figures/pNN.png`、`manifest.json`，并打印摘要。
 
 **先看退出码：**
 - `0` — 图数量一致，继续
 - `3` — **图可能漏了**。查 `manifest.json` 的 `per_page` 定位缺失页，用 `--pages 5,12-14` 强制渲染，直到一致
-- `1` — 报错（缺 PyMuPDF → `pip install pymupdf`）
+- `1` — 报错（缺 PyMuPDF → `pip install pymupdf`；缺 PaddleOCR → `pip install paddlepaddle paddleocr`）
 
-摘要里 `SCANNED` 表示全篇无文本层：此时 `figures/` 就是全部页面，用 Read 工具逐张视觉识别后翻译。
+摘要里 `SCANNED` 表示全篇无文本层。此时：
 
-**若当前模型不具备识图能力**，扫描件到此为止：如实告诉用户「本模型无法读取扫描件内容」，让用户换用多模态模型或提供文字版 PDF。**绝不允许根据文件名、页数或常识推测论文内容**——编造的译文比没有译文危害大得多。
+- **用了 `--ocr`**：`text.txt` 已是 OCR 结果，照常翻译，但**要提醒用户 OCR 可能认错字**，公式和符号尤其要核对
+- **没用 `--ocr`**：`figures/` 就是全部页面，用 Read 工具逐张视觉识别后翻译
+
+**若当前模型不具备识图能力，且未启用 `--ocr`**，扫描件到此为止：如实告诉用户「本模型无法读取扫描件内容」，让用户改用 `--ocr`、换多模态模型，或提供文字版 PDF。**绝不允许根据文件名、页数或常识推测论文内容**——编造的译文比没有译文危害大得多。
 
 ### 2. 翻译
 

@@ -1,0 +1,9 @@
+# 必需
+pymupdf>=1.23.0
+
+# 可选：扫描件 OCR。约 1GB，只在处理无文本层的 PDF 时需要。
+# 实测版本 paddleocr 3.7.0 + paddlepaddle 3.3.1 (Python 3.13)。
+#   pip install paddlepaddle paddleocr
+# 脚本内部强制 enable_mkldnn=False，绕过部分 paddle 构建的 oneDNN 崩溃。
+# paddlepaddle>=3.0
+# paddleocr>=3.0

@@ -24,21 +24,23 @@
 
 > ### ⚠️ 使用前提，务必先读
 >
-> **1. 需要多模态（能识图）的模型**
+> **1. 扫描件需要 OCR 或多模态模型，二选一**
 >
-> 本 skill 只负责把图从 PDF 里挖出来、渲染成图片、做数量校验——**看图的是模型，不是脚本**。脚本不做 OCR，也不理解图的内容。
+> 本 skill 只负责把图从 PDF 里挖出来、渲染、做数量校验——**理解图的内容不是脚本的事**。
 >
-> | 场景 | 是否需要识图能力 |
+> | 场景 | 需要什么 |
 > |---|---|
-> | 扫描件（无文本层）翻译 | **必须** — 全部正文都靠模型看图识别 |
-> | 图注错位复核 | **必须** — 要渲染 PDF 页面肉眼比对 |
-> | 文字型 PDF 翻译 | 不需要 — 正文走文本层，图原样搬运 |
+> | 文字型 PDF 翻译 | 都不需要 — 正文走文本层，图原样搬运 |
+> | 扫描件翻译 | **`--ocr`**（装 PaddleOCR）**或**多模态模型看图，二选一 |
+> | 图注错位复核 | **多模态模型** — 要渲染 PDF 页面肉眼比对 |
 >
-> 也就是说：纯文本模型能跑通文字型 PDF，但**遇到扫描件会直接失效**。
+> 也就是说：纯文本模型配上 `--ocr` 也能处理扫描件，只是最后的图注复核仍需人眼或多模态模型。
 >
 > **2. 这是辅助工具，不是质检工具**
 >
 > 脚本能保证的只有三件事：图没被漏掉、图注没错位、章节没缺失。**翻译质量完全取决于你用的模型**——术语准确性、专业表述、公式转写都可能出错，而且错得很自然，不容易一眼看出来。
+>
+> OCR 同理：识别率再高也会错，公式、上下标、特殊符号尤其容易出问题。
 >
 > 学术用途请务必对照原文人工复核，尤其是**数据、单位、结论性表述**。别拿机翻结果直接投稿、引用或转述给他人。
 
@@ -68,14 +70,21 @@
 
 | 用途 | 依赖 | 安装 |
 |---|---|---|
-| 识别图片内容 | **多模态模型** | 见上方使用前提 |
 | PDF 解析与渲染 | PyMuPDF | `pip install pymupdf` |
+| 扫描件 OCR（可选） | PaddleOCR | `pip install paddlepaddle paddleocr` |
+| 理解图内容 | 多模态模型 | 见上方使用前提 |
 | Markdown → HTML | pandoc ≥ 3.0 | [pandoc.org/installing](https://pandoc.org/installing.html) |
 | HTML → PDF | Chrome 或 Edge | 大多数系统已自带 |
 
-**不需要 LaTeX**，也**不需要 OCR 引擎**（文字型 PDF 直接读文本层，扫描件渲染成图后交给模型视觉识别）。
+**OCR 说明：**
 
-只翻译、不导出 PDF 的话，pandoc 和浏览器可以不装。
+- **默认用不上**——文字型 PDF 直接读文本层，OCR 只在扫描件（无文本层）时才需要
+- **安装体积约 1GB**，首次运行还会自动下载 OCR 模型（约 20MB，之后走缓存）
+- 用法：提取时加 `--ocr`；对文字型 PDF 加了也会被自动忽略，不会白跑
+- 实测版本：`paddleocr 3.7.0` + `paddlepaddle 3.3.1` + Python 3.13
+- 脚本内部强制 `enable_mkldnn=False`——部分 paddlepaddle 构建的 oneDNN 后端会直接崩（`ConvertPirAttribute2RuntimeAttribute not support`），关掉才能跑起来。你不需要做任何配置
+
+**不需要 LaTeX**。只翻译、不导出 PDF 的话，pandoc 和浏览器可以不装。
 
 ---
 
@@ -89,6 +98,9 @@ Skill 目录结构与仓库根目录一致，直接 clone 到 skills 目录即�
 git clone https://github.com/obenic/translating-papers.git \
   ~/.claude/skills/translating-papers
 pip install pymupdf
+
+# 可选：需要 OCR 时安装（约 1GB）
+pip install paddlepaddle paddleocr
 ```
 
 **Windows (PowerShell)**
@@ -97,6 +109,9 @@ pip install pymupdf
 git clone https://github.com/obenic/translating-papers.git `
   "$env:USERPROFILE\.claude\skills\translating-papers"
 pip install pymupdf
+
+# 可选：需要 OCR 时安装（约 1GB）
+pip install paddlepaddle paddleocr
 ```
 
 装在 `~/.claude/skills/` 下是**全局生效**（任何目录都能用）；只想在某个项目里用就放到该项目的 `.claude/skills/` 下。
@@ -179,16 +194,26 @@ Skill 默认由模型读 `description` 判断是否调用——大多数时候�
 ### `extract_paper.py` — 提取文本 + 图
 
 ```bash
-python extract_paper.py <pdf> [-o OUTDIR] [--dpi 200] [--max-width 1600] [--pages 21-24]
+python extract_paper.py <pdf> [-o OUTDIR] [--dpi 200] [--max-width 1600] [--pages 21-24] [--ocr] [--ocr-lang en]
 ```
 
 产出 `text.txt`、`figures/pNN.png`、`manifest.json`。
+
+**参数说明：**
+
+| 参数 | 作用 |
+|---|---|
+| `--ocr` | 扫描件用 PaddleOCR 提取文字。文字型 PDF 会自动忽略此参数 |
+| `--ocr-lang en` | OCR 语种：`en` / `ch`（中英混排）/ `japan` / `korean` 等，默认 `en` |
+| `--pages 21-24` | 强制渲染指定页面（图数量告警时用） |
+| `--dpi 200` | 渲染分辨率，扫描件识别率低时改 `300` |
+| `--max-width 1600` | 限制图片宽度（默认 1600px，控制文件大小） |
 
 | 退出码 | 含义 |
 |---|---|
 | `0` | 图数量与正文引用一致 |
 | `3` | **图可能漏了** — 查 `manifest.json` 的 `per_page`，用 `--pages` 强制渲染 |
-| `1` | 出错（通常是缺 PyMuPDF） |
+| `1` | 出错（通常是缺 PyMuPDF 或缺 paddleocr） |
 
 输出示例：
 
@@ -200,6 +225,22 @@ figures     : 4 rendered -> ./figures
   p 23  figures/p23.png     1600x1357  1620KB  (standalone figure page; raster image 98% of page)
   p 24  figures/p24.png     1600x1891  1988KB  (standalone figure page; raster image 94% of page)
 referenced  : Fig [1, 2, 3, 4]
+```
+
+**扫描件示例（加 `--ocr`）：**
+
+```
+OCR: scanned PDF, reading 1 pages (lang=en; first run downloads models)...
+  p  1: 336 chars
+pages       : 1  (text pages: 1)
+OCR         : PaddleOCR (lang=en)
+figures     : 1 rendered -> ./figures
+referenced  : Fig [1]
+
+OK: figure count consistent with text references.
+```
+
+注意最后两行：OCR 出文字之后，**图数量交叉校验对扫描件也重新生效了**——没有文本层时这个校验是做不了的。
 
 OK: figure count consistent with text references.
 ```
@@ -244,8 +285,9 @@ Markdown 输出用 pandoc 的 `implicit_figures`，把图和图注编译成 `<fi
 ## 已知限制
 
 - **翻译质量不由本项目保证**——脚本只管流程完整性，译文对错取决于模型，必须人工复核
-- **纯文本模型跑不了扫描件**——无文本层时全靠模型看图，没有识图能力就没有正文
-- 扫描件准确率取决于扫描质量，模糊件、手写批注、复杂表格都可能识别错
+- **OCR 会认错字**——公式、上下标、希腊字母、特殊符号尤其容易出错，扫描件译文更要逐句核对
+- 扫描件识别率取决于扫描质量，模糊件、手写批注、复杂表格都可能识别错，可试 `--dpi 300`
+- 不装 OCR 时，纯文本模型遇到扫描件仍然无解（需多模态模型看图）
 - 图注错位、章节遗漏这类问题脚本查不出来，需要人工抽查生成的 PDF
 - 交叉校验是启发式的：一页可能含多图，也可能一图跨页，数量不符时是**提示复查**而非断言出错
 - 中英文字体依赖系统已装的 Han 字体，缺失时回退到系统默认
