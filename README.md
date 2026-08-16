@@ -83,6 +83,7 @@
 - 用法：提取时加 `--ocr`；对文字型 PDF 加了也会被自动忽略，不会白跑
 - 实测版本：`paddleocr 3.7.0` + `paddlepaddle 3.3.1` + Python 3.13
 - 脚本内部强制 `enable_mkldnn=False`——部分 paddlepaddle 构建的 oneDNN 后端会直接崩（`ConvertPirAttribute2RuntimeAttribute not support`），关掉才能跑起来。你不需要做任何配置
+- **注意 numpy 会被降级**：paddlex 声明 `numpy<2.4`，装 PaddleOCR 时 pip 会把 numpy 降到 2.3.x。实测 numpy 2.5.2 下本项目用到的 OCR 路径（检测+识别）完全正常，声明偏保守；但如果你手动升 numpy，`pip check` 会报冲突，且后续安装可能又把它降回去。介意的话保持默认即可
 
 **不需要 LaTeX**。只翻译、不导出 PDF 的话，pandoc 和浏览器可以不装。
 

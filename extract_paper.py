@@ -251,7 +251,12 @@ def main():
                 print(f"  p{i + 1:>3}: {len(text)} chars")
             text_pages = sum(1 for p in pages if p["chars"] >= MIN_TEXT_CHARS)
             ocr_used = True
-            if text_pages == 0:
+            # Judge OCR success on total yield, not on MIN_TEXT_CHARS: a
+            # legitimately sparse scan (title pages, short sections) clears
+            # 100 chars/page easily but never reaches the body-text threshold,
+            # and warning there cries wolf on a perfectly good extraction.
+            total_chars = sum(p["chars"] for p in pages)
+            if total_chars < 20 * len(pages):
                 print("WARNING: OCR produced almost no text. The scan may be "
                       "too low-resolution - retry with --dpi 300.")
             scanned = False
