@@ -66,19 +66,54 @@
 
 ---
 
+## 首选路径：先把 PDF 转成 Word
+
+**这是默认第一步。** PDF→Word 的转换器已经替你解决了本项目最难的两件事：图以图片形式嵌进去了，而且**落在正文里它原本该在的位置**。拿到这个就不必再做图区检测、切面板、猜图该插到哪。
+
+> Word 文档只是脚手架，**不是交付物**。最终输出仍然是 Markdown + PDF + 图片文件夹。
+
+**Acrobat Pro 手动导出质量最好**（四步）：
+
+```
+Acrobat 打开 PDF → File → Export To → Microsoft Word → Word Document
+保存对话框里点 Settings… → Layout Settings → 选「Retain Page Layout」
+```
+
+「Retain Page Layout」是关键；另一个选项「Retain Flowing Text」会重排页面、把图挪走。
+
+**为什么不能自动调 Acrobat**：`doc.saveAs` 是特权方法，COM 外部调用一律被拒（报「尚未实现」）。标准绕法是装 folder-level 受信任脚本（`pdf_to_docx.py --install-acrobat-js`），但实测 Acrobat 25.x 不加载用户级 folder 脚本，应用级目录又需要管理员权限。所以自动化只能退到 Word。
+
+**Word COM 是自动兜底，质量差一档**：实测把双栏正文打散进 58 个文本框，还切在词中间（`ScienceDirec` + `t`），约 20% 段落断在句中，公式会散架。能用，但要有准备。
+
+### 决策点：满不满意，用户说
+
+转换完、抽取完，**流程会停下来问你**：Word 那份文字干净吗？（带水印、扫描件、公式排版复杂的原件容易出乱码错字。）
+
+| 你的回答 | 走哪条路 |
+|---|---|
+| **满意** | 直接翻译抽取出的正文，**跳过 OCR / 多模态识图** |
+| **不满意** | 丢掉 Word，回退到 `extract_paper.py` + `--ocr` 或多模态识图 |
+
+这一步是硬要求，不是可选项——转换失真是静默发生的，只有人眼能判断。
+
+---
+
 ## 依赖
 
 | 用途 | 依赖 | 安装 |
 |---|---|---|
 | PDF 解析与渲染 | PyMuPDF | `pip install pymupdf` |
-| 扫描件 OCR（可选） | PaddleOCR | `pip install paddlepaddle paddleocr` |
+| 读 Word 文档（首选路径） | lxml | `pip install lxml` |
+| 切分图面板 | Pillow + NumPy | `pip install pillow numpy` |
+| 调 Acrobat / Word 转换（Windows） | pywin32 | `pip install pywin32` |
+| 扫描件 OCR / 面板标签校验 | PaddleOCR | `pip install paddlepaddle paddleocr` |
 | 理解图内容 | 多模态模型 | 见上方使用前提 |
 | Markdown → HTML | pandoc ≥ 3.0 | [pandoc.org/installing](https://pandoc.org/installing.html) |
 | HTML → PDF | Chrome 或 Edge | 大多数系统已自带 |
 
 **OCR 说明：**
 
-- **默认用不上**——文字型 PDF 直接读文本层，OCR 只在扫描件（无文本层）时才需要
+- **默认用不上**——文字型 PDF 直接读文本层，OCR 只在两种情况需要：扫描件（无文本层），或用 `panel_split.py` 切图面板时做标签校验
 - **安装体积约 1GB**，首次运行还会自动下载 OCR 模型（约 20MB，之后走缓存）
 - 用法：提取时加 `--ocr`；对文字型 PDF 加了也会被自动忽略，不会白跑
 - 实测版本：`paddleocr 3.7.0` + `paddlepaddle 3.3.1` + Python 3.13
@@ -129,23 +164,27 @@ pip install paddlepaddle paddleocr
 翻译桌面上的 example-paper.pdf
 ```
 
-Claude 会自动完成：提取文本 → 检测并渲染图 → 交叉校验 → 分批翻译 → 写 Markdown → 转 PDF → 清理临时文件。
+Claude 会自动完成：转 Word → 抽正文与图 → **问你满不满意** → 分批翻译 → 写 Markdown → 图归位 → 转 PDF → 清理临时文件。
 
 产物：
 
 ```
 <原文标题> 中文翻译.md      # 依赖同级图片文件夹
 <原文标题> 中文翻译.pdf     # 图片已内嵌，可单独发送
-<原文标题> 中文翻译_figs/   # 图片
+<原文标题> 中文翻译_figs/   # 图片（按图号命名，或按 a/b/c 面板命名）
 ```
 
 ### 翻译规范
 
-- 全文翻译，不跳段（摘要、引言、结果、讨论、方法、致谢、图注）
-- **参考文献保留英文原文**，不翻译
+- 全文翻译，不跳段（摘要、引言、结果、讨论、方法、作者贡献、**图注**）
+- **参考文献、致谢、CRediT、利益冲突声明保留英文原文**，不翻译
+- **图注要翻译**——复杂图的图注能有几百字，是读懂图的唯一入口
+- 图注里的面板标记（**a** / **(a)**）与图号原样保留，只译描述文字
+- **图片本体不动**：图里的英文标注保持原样，不做 OCR 重排
 - 术语首次出现附原文：系间窜越（intersystem crossing, ISC）
 - 化学式、单位、数值、公式编号、图表编号原样保留
-- 人名、期刊名保留英文
+- 公式用 Unicode 符号书写，不用 LaTeX
+- 人名、期刊名、仪器型号保留英文
 
 ---
 
@@ -190,12 +229,74 @@ Skill 默认由模型读 `description` 判断是否调用——大多数时候�
 
 ## 脚本说明
 
-三个脚本都可以脱离 Claude 单独当命令行工具用。
+七个脚本都可以脱离 Claude 单独当命令行工具用。
 
-### `extract_paper.py` — 提取文本 + 图
+### `pdf_to_docx.py` — PDF 转 Word（首选第一步）
 
 ```bash
-python extract_paper.py <pdf> [-o OUTDIR] [--dpi 200] [--max-width 1600] [--pages 21-24] [--ocr] [--ocr-lang en]
+python pdf_to_docx.py <pdf> [-o out.docx] [--engine auto|acrobat|word]
+python pdf_to_docx.py --check                 # 看本机有哪些转换器
+python pdf_to_docx.py --install-acrobat-js    # 一次性安装 Acrobat 受信任脚本
+```
+
+`--engine auto` 先试 Acrobat，失败自动退 Word，并打印手动导出的四步。Windows only（依赖 COM）。
+
+### `docx_extract.py` — 从 Word 抽正文 + 图 + 图的位置
+
+```bash
+python docx_extract.py <docx> [-o OUTDIR]
+```
+
+产出 `content.md`（正文按顺序，图的位置用 `[[FIG 2 -> media/fig02.jpg]]` 标出）、`content.json`、`media/`（图片按图号命名）、`manifest.json`。
+
+自动处理掉三个坑：
+
+| 坑 | 处理 |
+|---|---|
+| 每段文字出现两遍 | Word 把文本框同时写成 DrawingML 和 VML 两份，跳过 `mc:Fallback` 子树 |
+| 出版商 logo 被当成图 1、图 2，真图全体错位两号 | 按像素尺寸滤掉页面装饰（Elsevier logo 只有 248×271，真图 ≥ 950） |
+| 图和它自己的图注在 XML 里离得很远 | Word 把浮动图锚在附近任意一段上，所以**按顺序配对**图与图注，不按距离 |
+
+参考文献 / 致谢 / 声明类章节会自动标 `<!-- 不翻译 -->`。
+
+### `panel_split.py` — 把整张图切成 a/b/c 单个面板
+
+```bash
+python panel_split.py <figure.png> -o panels/ --layout 4,3,4,3,1 [--expect a-o]
+python panel_split.py <figure.png> -o panels/ --grid 2x2      # 强制均匀网格
+python panel_split.py <figure.png> -o panels/ --no-ocr        # 只用几何校验
+```
+
+**`--layout` 是每行几个面板，必须自己看图数出来。** 不给也能跑（自动模式），但经常数错——数错时脚本 exit 3 明说，不会假装成功。面板行间距可以只有 4 px，而面板*内部*（图和刻度标签之间）的空白能有 30 px，纯靠像素分不出哪条是边界。
+
+OCR 只做校验和命名，不做切分。五重校验任一不过就 exit 3：
+
+| 校验 | 抓的是什么 |
+|---|---|
+| 标签一致性 | OCR 读到的 `a`/`b`/`c` 必须落在按阅读顺序命名为同名的那张图里 |
+| 边框留白 | 每张图四周必须是背景色，有墨压边 = 内容被切断 |
+| 墨量守恒 | 所有面板加起来要覆盖整图 ~100% 的墨，少了 = 丢了色标/图例 |
+| 文字守恒 | 每个 OCR 文本框都要落进某张面板 |
+| 图注清单 | 图注里列出的面板数（`--expect`）必须和切出的张数一致 |
+
+OCR 读不出 `i`、`l`、`o` 是常态（细笔画），脚本会在 note 里说明，并靠其余标签的一致性给它们背书——这不算失败。
+
+### `insert_figures.py` — 把图移到正文第一次提到它的位置
+
+```bash
+python insert_figures.py <译文.md> [--dry-run] [-o out.md]
+```
+
+图全堆在文末的 `## 图` 里，读者在第 4 页读到「如图 2 所示」要翻到第 12 页再翻回来。脚本把图块整块抬出来，插到第一次提到该图号的正文段落之后，并核对前后图片数量，不一致就拒绝写入。原文件留 `.bak`。
+
+「补充图 2」不算提到图 2，会跳过。退出码 `3` = 有图在正文里根本找不到提及，必须去查。
+
+> 走 Word 首选路径时，图的位置已经由 `docx_extract.py` 给出（比「首次提及」更准），这一步可以跳过；它主要服务于 `extract_paper.py` 回退路径。
+
+### `extract_paper.py` — 提取文本 + 图（回退路径）
+
+```bash
+python extract_paper.py <pdf> [-o OUTDIR] [--dpi 200] [--max-width 1600] [--pages 21-24] [--ocr] [--ocr-lang en] [--split-panels]
 ```
 
 产出 `text.txt`、`figures/pNN.png`、`manifest.json`。
@@ -286,12 +387,16 @@ Markdown 输出用 pandoc 的 `implicit_figures`，把图和图注编译成 `<fi
 ## 已知限制
 
 - **翻译质量不由本项目保证**——脚本只管流程完整性，译文对错取决于模型，必须人工复核
+- **Acrobat 导出无法自动化**：`doc.saveAs` 是特权方法，COM 调用被拒；受信任 folder 脚本在 Acrobat 25.x 不加载，应用级目录需管理员权限。只能手动导出，或退到 Word（质量差一档）
+- **Word 转换会把正文打散**：双栏论文实测约 20% 段落断在句中，公式会散架。这是「决策点」存在的原因——不满意就回退到 OCR/多模态路径
+- **不规则版式切不了面板**：`--layout` 只能表达「每行几个」。若某个面板跨两行（如 a 左上、b 右侧跨行、c 左下），退回整张图
+- **面板紧贴时会轻微串边**：并排的 SHAP force plot 之间没有空白，切点靠最小墨量猜，邻图的轴标题可能蹭进来；校验会报出来
+- **图注抓取率不是 100%**：实测两篇论文 5/6 与 3/4。抓不到只影响自动编号，不影响出图
 - **OCR 会认错字**——公式、上下标、希腊字母、特殊符号尤其容易出错，扫描件译文更要逐句核对
-- 扫描件识别率取决于扫描质量，模糊件、手写批注、复杂表格都可能识别错，可试 `--dpi 300`
 - 不装 OCR 时，纯文本模型遇到扫描件仍然无解（需多模态模型看图）
-- 图注错位、章节遗漏这类问题脚本查不出来，需要人工抽查生成的 PDF
 - 交叉校验是启发式的：一页可能含多图，也可能一图跨页，数量不符时是**提示复查**而非断言出错
 - 中英文字体依赖系统已装的 Han 字体，缺失时回退到系统默认
+- `pdf_to_docx.py` 仅 Windows 可用（依赖 COM）；其余脚本跨平台
 - 主要在 Windows 11 + Python 3.13 上验证；macOS / Linux 路径已适配但未实机测试
 
 ---

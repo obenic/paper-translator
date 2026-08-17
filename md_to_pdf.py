@@ -74,7 +74,11 @@ h1.title, header#title-block-header {{ display: none; }}
    its caption - and a caption printed under the wrong figure is worse than
    no caption at all. */
 figure {{ break-inside: avoid; page-break-inside: avoid; margin: 1.4em 0; }}
-figure img {{ margin: 0 auto .5em; }}
+/* Cap the image height so image + caption still fit one page. break-inside is
+   only honoured while the block fits; a tall portrait figure (a 951x1373 plot
+   plus a five-line caption) overflows the page box, Chrome gives up, and the
+   caption lands alone on the next page under nothing. */
+figure img {{ margin: 0 auto .5em; max-height: 72vh; width: auto; }}
 figcaption {{ font-size: 9pt; line-height: 1.65; color: #2a2a2a;
              text-align: left; }}
 img {{ max-width: 100%; height: auto; display: block; margin: .8em auto; }}

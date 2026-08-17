@@ -7,10 +7,12 @@ extracts both, and cross-checks them against each other.
 
 Usage:
     python extract_paper.py <pdf> [-o OUTDIR] [--dpi 200] [--pages 21-24] [--ocr]
+                                  [--split-panels]
 
 Outputs into OUTDIR (default: <pdf_stem>_extract next to the PDF):
     text.txt          full text, one "===== PAGE n =====" marker per page
     figures/p21.png   rendered pages that carry figures
+    panels/p21_a.png  individual panels, with --split-panels
     manifest.json     per-page analysis + completeness check
 
 Figure detection covers three cases the text layer misses:
@@ -58,6 +60,23 @@ CAPTION_RE = re.compile(
 REFERENCE_RE = re.compile(
     r"(Supplementary|Supp\.|Extended\s+Data|SI)?\s*\bFig(?:ure)?s?\.?\s*(\d{1,2})",
     re.I)
+
+# A caption block opens with "Fig. 2." / "Figure 2:" / "Fig. 1 |" - a figure
+# number followed by a separator. Anchored at the start of a text block so a
+# mid-sentence "see Fig. 2" cannot pose as a caption.
+CAPTION_START_RE = re.compile(
+    r"^\**\s*(?:Supplementary\s+|Extended\s+Data\s+)?"
+    r"Fig(?:ure)?\.?\s*(\d{1,2})\s*[.|:｜]", re.I)
+# Panel groups as Elsevier and IEEE write them: "(a)", "(a, b)", "(a-d)", and
+# with sub-indices "(a1-a2)".
+PANEL_PAREN_RE = re.compile(
+    r"\(\s*([a-z]\d?(?:\s*(?:,|and|&|-|–)\s*[a-z]\d?)*)\s*\)")
+# Nature drops the parentheses and bolds the letter; bold is lost in the text
+# layer, so the only signal left is "lone letter, then a capital".
+PANEL_BARE_RE = re.compile(r"(?<![A-Za-z])([a-z])\s+(?=[A-Z])")
+# ... and the same for a bolded range, "h-k SHAP dependence plots".
+PANEL_BARE_RANGE_RE = re.compile(
+    r"(?<![A-Za-z])([a-z])\s*[-–]\s*([a-z])\s+(?=[A-Z])")
 
 
 def main_figure_numbers(text, pattern):
@@ -191,7 +210,227 @@ def analyze(page):
     }
 
 
+def caption_panel_letters(text):
+    """Panel letters a caption claims exist. Returns (letters, how_confident).
+
+    Worth having because it comes from the text layer, entirely independent of
+    the image: if the caption enumerates a-o and the splitter produced 14
+    panels, one is missing and no amount of OCR agreement would have said so.
+    """
+    def longest_run(candidates):
+        # Panels are always labelled from 'a' with no gaps, so keeping the
+        # unbroken run rejects prose enumerations: Fig 3's caption says
+        # "demonstrating (i) a rigid shift ... and (ii) a reduction", and
+        # without this the stray (i) becomes a ninth panel.
+        run = []
+        for i in range(26):
+            ch = chr(ord("a") + i)
+            if ch not in candidates:
+                break
+            run.append(ch)
+        return run
+
+    def expand(part):
+        """'a'->[a]; 'a-d'->[a,b,c,d]; 'a1-a2'->[a1,a2]; 'b2'->[b2]."""
+        toks = re.findall(r"[a-z]\d?", part)
+        if len(toks) == 2 and re.search(r"-|–", part):
+            lo, hi = toks
+            if lo[0] == hi[0] and len(lo) == 2 and len(hi) == 2:
+                return [f"{lo[0]}{d}" for d in range(int(lo[1]), int(hi[1]) + 1)]
+            if len(lo) == 1 and len(hi) == 1:
+                return [chr(o) for o in range(ord(lo), ord(hi) + 1)]
+        return toks
+
+    letters = set()
+    for group in PANEL_PAREN_RE.findall(text):
+        for part in re.split(r"\s*(?:,|and|&)\s*", group):
+            letters.update(expand(part))
+    run = longest_run(letters)
+    if len(run) >= 2:
+        return run, "parenthesised"
+    # Sub-indexed panels (a1, a2, b1, b2) have no plain-letter run to find;
+    # accept them when every token carries an index and 'a1' is present.
+    indexed = sorted(k for k in letters if len(k) == 2)
+    if len(indexed) >= 2 and indexed[0] == "a1":
+        return indexed, "parenthesised"
+
+    bare = set(PANEL_BARE_RE.findall(text))
+    for lo, hi in PANEL_BARE_RANGE_RE.findall(text):
+        bare.update(chr(o) for o in range(ord(lo), ord(hi) + 1))
+    run = longest_run(bare)
+    if len(run) >= 3:
+        return run, "bare"
+    return [], "none"
+
+
+def _line_offsets(raw):
+    """(char offset, line) for every line in a text block."""
+    out, pos = [], 0
+    for line in raw.splitlines():
+        out.append((pos, line))
+        pos += len(line) + 1
+    return out
+
+
+def figure_captions(doc):
+    """Every figure caption in the document: [{num, page, rect, text, panels}].
+
+    Captions are not always next to their artwork - the reference Nature paper
+    keeps all four captions on page 20 and the figures on pages 21-24 - so they
+    are collected document-wide and paired with artwork later.
+    """
+    import fitz
+
+    found = []
+    for pno, page in enumerate(doc, start=1):
+        try:
+            blocks = page.get_text("blocks")
+        except Exception:
+            continue
+        for b in blocks:
+            if len(b) < 5 or not isinstance(b[4], str):
+                continue
+            raw = b[4]
+            # Match at the start of any line, not just the start of the block.
+            # PyMuPDF often glues a caption onto the paragraph above it, and
+            # Nature-style captions run across a page break, so a block-anchored
+            # test misses them entirely.
+            for offset, line in _line_offsets(raw):
+                text = " ".join(line.split())
+                if re.match(r"^\**\s*(Supplementary|Extended)", text, re.I):
+                    continue
+                m = CAPTION_START_RE.match(text)
+                if not m:
+                    continue
+                tail = " ".join(raw[offset:].split())
+                panels, how = caption_panel_letters(tail)
+                found.append({
+                    "num": int(m.group(1)),
+                    "page": pno,
+                    "rect": fitz.Rect(b[:4]),
+                    "text": tail[:1200],
+                    "panels": panels,
+                    "panels_from": how,
+                })
+                break
+    found.sort(key=lambda c: (c["num"], c["page"], c["rect"].y0))
+    seen, unique = set(), []
+    for c in found:
+        if c["num"] not in seen:
+            seen.add(c["num"])
+            unique.append(c)
+    return unique
+
+
+def pair_captions(regions, captions):
+    """Attach a figure number to each artwork region.
+
+    Same page first: a caption sits directly under (or over) its own artwork,
+    so vertical distance plus horizontal overlap identifies it. Whatever is
+    left over is matched in document order, which is what rescues the Nature
+    layout where every caption lives on a different page than its figure.
+    """
+    numbered = {}
+    free = list(captions)
+    for i, (pno, rect) in enumerate(regions):
+        same_page = [c for c in free if c["page"] == pno]
+        best, best_key = None, None
+        for c in same_page:
+            overlap = min(rect.x1, c["rect"].x1) - max(rect.x0, c["rect"].x0)
+            if overlap <= 0.3 * min(rect.width, c["rect"].width):
+                continue
+            gap = min(abs(c["rect"].y0 - rect.y1), abs(rect.y0 - c["rect"].y1))
+            if best_key is None or gap < best_key:
+                best, best_key = c, gap
+        if best is not None:
+            numbered[i] = best
+            free.remove(best)
+    leftovers = [i for i in range(len(regions)) if i not in numbered]
+    for i, c in zip(leftovers, free):
+        numbered[i] = c
+    return numbered
+
+
+def page_pixmap(page, rect, zoom):
+    """Render one clipped region of a page at the given zoom."""
+    import fitz
+
+    return page.get_pixmap(matrix=fitz.Matrix(zoom, zoom), clip=rect)
+
+
+def figure_regions(page, min_area_frac=0.02, gap=12, max_label_chars=40):
+    """Bounding boxes of the figures on a page, without the surrounding prose.
+
+    A two-column journal page carries the figure, its caption, and two columns
+    of body text. Rendering the whole page and handing that to the panel
+    splitter turns paragraphs into "panels" - page 6 of the ODMR paper produced
+    52 of them. So figures are located from what the PDF already knows (raster
+    images and vector drawing rectangles) rather than guessed from pixels.
+
+    Short text near a cluster is pulled back in: panel letters and axis labels
+    are text objects, and cropping to the artwork alone would slice "(a)" off.
+    Long text - captions, paragraphs - is left out by the length cut-off.
+    """
+    import fitz
+
+    page_area = abs(page.rect.width * page.rect.height) or 1.0
+    rects = []
+    try:
+        for info in page.get_image_info():
+            rects.append(fitz.Rect(info["bbox"]))
+    except Exception:
+        pass
+    try:
+        for drawing in page.get_drawings():
+            r = fitz.Rect(drawing["rect"])
+            if r.width > 4 and r.height > 4:
+                rects.append(r)
+    except Exception:
+        pass
+    if not rects:
+        return []
+
+    merged = []
+    for rect in rects:
+        rect = fitz.Rect(rect)
+        absorbed = True
+        while absorbed:
+            absorbed = False
+            for other in list(merged):
+                if fitz.Rect(other).intersects(rect + (-gap, -gap, gap, gap)):
+                    rect |= other
+                    merged.remove(other)
+                    absorbed = True
+        merged.append(rect)
+
+    blocks = [(fitz.Rect(b[:4]), b[4]) for b in page.get_text("blocks")
+              if len(b) >= 5 and isinstance(b[4], str)]
+    out = []
+    for cluster in merged:
+        if abs(cluster.width * cluster.height) < min_area_frac * page_area:
+            continue
+        near = cluster + (-2 * gap, -2 * gap, 2 * gap, 2 * gap)
+        for rect, text in blocks:
+            if len(text.strip()) > max_label_chars:
+                continue
+            # Mostly inside, not merely touching. On page 6 of the ODMR paper
+            # the heading "4. Conclusions" in the far column clips the corner
+            # of the search box by five points; a bare intersects() test drags
+            # the crop across the gutter and swallows a column of prose.
+            overlap = near & rect
+            area = abs(rect.width * rect.height) or 1.0
+            if overlap.is_valid and abs(overlap.width * overlap.height) >= 0.6 * area:
+                cluster |= rect
+        out.append(cluster & page.rect)
+    out.sort(key=lambda r: (r.y0, r.x0))
+    return out
+
+
 def main():
+    try:
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:                               # noqa: BLE001
+        pass
     ap = argparse.ArgumentParser(add_help=True)
     ap.add_argument("pdf")
     ap.add_argument("-o", "--out-dir")
@@ -205,6 +444,11 @@ def main():
     ap.add_argument("--ocr-lang", default="en",
                     help="PaddleOCR language: en, ch, japan, korean, ... "
                          "(default: en; use ch for Chinese-English mixed)")
+    ap.add_argument("--split-panels", action="store_true",
+                    help="also cut each rendered figure into its panels "
+                         "(a, b, c...) under panels/, with OCR completeness "
+                         "checks. For an exact split, re-run panel_split.py "
+                         "on one figure with --layout")
     args = ap.parse_args()
 
     try:
@@ -290,6 +534,65 @@ def main():
             "why": pages[pno - 1]["why"],
         })
 
+    # Optional: cut each rendered figure into its panels. A page image holding
+    # 15 sub-plots is one blob to a translator; panel 2e next to caption 2e is
+    # what a reader actually needs.
+    panel_reports = []
+    if args.split_panels and rendered:
+        try:
+            sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+            from panel_split import split_figure
+        except ImportError as e:
+            print(f"WARNING: panel splitting unavailable ({e})", file=sys.stderr)
+        else:
+            panel_dir = os.path.join(out_dir, "panels")
+            crop_dir = os.path.join(fig_dir, "cropped")
+            os.makedirs(crop_dir, exist_ok=True)
+
+            # Locate every figure in the document, then let the captions say
+            # which number each one is. "Fig. 2." in the text layer is far more
+            # reliable than counting pages: one page can hold two figures, and
+            # a figure's caption can live on another page entirely.
+            captions = figure_captions(doc)
+            regions = []
+            for r in rendered:
+                page = doc[r["page"] - 1]
+                found = figure_regions(page) or [page.rect]
+                regions.extend((r["page"], rect) for rect in found)
+            numbered = pair_captions(regions, captions)
+
+            print(f"\ncaptions found: Fig "
+                  f"{[c['num'] for c in captions] or 'none'}")
+            print(f"splitting {len(regions)} figure regions into panels...")
+            for i, (pno, rect) in enumerate(regions):
+                cap = numbered.get(i)
+                stem = f"fig{cap['num']:02d}" if cap else f"p{pno:02d}x{i:02d}"
+                expect = cap["panels"] if cap else []
+                zoom = min(args.dpi / 72.0, args.max_width / max(rect.width, 1))
+                pix = page_pixmap(doc[pno - 1], rect, zoom)
+                src = os.path.join(crop_dir, f"{stem}.png")
+                pix.save(src)
+                try:
+                    rep = split_figure(src, panel_dir, stem=stem,
+                                       lang=args.ocr_lang, expect=expect)
+                except Exception as e:                  # noqa: BLE001
+                    print(f"  {stem}: split failed ({e})")
+                    continue
+                rep["page"] = pno
+                rep["figure_number"] = cap["num"] if cap else None
+                rep["caption"] = cap["text"] if cap else None
+                rep["caption_panels"] = expect
+                rep["figure_crop"] = os.path.relpath(
+                    src, out_dir).replace("\\", "/")
+                panel_reports.append(rep)
+                flag = "ok" if rep["ok"] else f"{len(rep['problems'])} issue(s)"
+                exp = f", caption says {len(expect)}" if expect else ""
+                print(f"  {stem}: {pix.width}x{pix.height} -> "
+                      f"{rep['panel_count']} panels{exp}, "
+                      f"ink {rep['ink_kept_frac']:.1%}, {flag}")
+                for p in rep["problems"][:3]:
+                    print(f"      - {p}")
+
     # Cross-check: does the figure count match what the text references?
     # Captions ("Fig. 3 | ...") are authoritative when present; a paper that
     # only mentions figures inline falls back to the reference scan.
@@ -312,6 +615,7 @@ def main():
         "figures_rendered": len(rendered),
         "consistent": consistent,
         "rendered": rendered,
+        "panels": panel_reports,
         "per_page": [{k: v for k, v in p.items() if k != "_text"} for p in pages],
     }
     with open(os.path.join(out_dir, "manifest.json"), "w", encoding="utf-8") as f:

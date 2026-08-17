@@ -1,7 +1,15 @@
 # 必需
 pymupdf>=1.23.0
+lxml>=4.9.0
 
-# 可选：扫描件 OCR。约 1GB，只在处理无文本层的 PDF 时需要。
+# 切分图面板（panel_split.py）
+pillow>=10.0.0
+numpy>=1.24.0
+
+# PDF 转 Word（pdf_to_docx.py，仅 Windows，走 Acrobat / Word 的 COM 接口）
+# pywin32>=306
+
+# 可选：扫描件 OCR + 面板标签校验。约 1GB。
 # 实测版本 paddleocr 3.7.0 + paddlepaddle 3.3.1 (Python 3.13)。
 #   pip install paddlepaddle paddleocr
 # 脚本内部强制 enable_mkldnn=False，绕过部分 paddle 构建的 oneDNN 崩溃。
