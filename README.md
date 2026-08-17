@@ -1,4 +1,4 @@
-# translating-papers
+# paper-translator
 
 > 一个 Claude Code Skill：把英文学术论文 PDF 完整翻译成中文——**图和正文一起交付**，同时输出 Markdown 和 PDF。
 
@@ -131,8 +131,8 @@ Skill 目录结构与仓库根目录一致，直接 clone 到 skills 目录即�
 **macOS / Linux**
 
 ```bash
-git clone https://github.com/obenic/translating-papers.git \
-  ~/.claude/skills/translating-papers
+git clone https://github.com/obenic/paper-translator.git \
+  ~/.claude/skills/paper-translator
 pip install pymupdf
 
 # 可选：需要 OCR 时安装（约 1GB）
@@ -142,8 +142,8 @@ pip install paddlepaddle paddleocr
 **Windows (PowerShell)**
 
 ```powershell
-git clone https://github.com/obenic/translating-papers.git `
-  "$env:USERPROFILE\.claude\skills\translating-papers"
+git clone https://github.com/obenic/paper-translator.git `
+  "$env:USERPROFILE\.claude\skills\paper-translator"
 pip install pymupdf
 
 # 可选：需要 OCR 时安装（约 1GB）
@@ -202,7 +202,7 @@ Skill 默认由模型读 `description` 判断是否调用——大多数时候�
         "hooks": [
           {
             "type": "command",
-            "command": "python \"<你的home>/.claude/skills/translating-papers/hook_detect.py\"",
+            "command": "python \"<你的home>/.claude/skills/paper-translator/hook_detect.py\"",
             "timeout": 10
           }
         ]

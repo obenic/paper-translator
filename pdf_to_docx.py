@@ -40,7 +40,7 @@ import subprocess
 import sys
 import time
 
-ACROBAT_JS = """// installed by the translating-papers skill.
+ACROBAT_JS = """// installed by the paper-translator skill.
 // Acrobat blocks doc.saveAs from an unprivileged caller, so the export is
 // wrapped in a trusted function that COM is allowed to invoke.
 var tpPdfToDocx = app.trustedFunction(function (inPath, outPath) {
@@ -74,9 +74,9 @@ def acrobat_js_path():
     # Prefer the numbered/continuous track folder Acrobat actually uses.
     for pref in ("DC", "2020", "2017"):
         if pref in versions:
-            return os.path.join(base, pref, "JavaScripts", "translating_papers.js")
+            return os.path.join(base, pref, "JavaScripts", "paper_translator.js")
     return os.path.join(base, versions[0], "JavaScripts",
-                        "translating_papers.js") if versions else None
+                        "paper_translator.js") if versions else None
 
 
 def install_acrobat_js():

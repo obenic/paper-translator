@@ -1,5 +1,5 @@
 ---
-name: translating-papers
+name: paper-translator
 description: Use when the user asks to translate an academic paper, PDF, or foreign-language literature (e.g. "翻译这篇文献", "把PDF翻译成中文", "translate this paper", 上传英文文献要求翻译), including scanned PDFs and papers whose figures sit on separate pages.
 ---
 
@@ -32,7 +32,7 @@ PDF 里的图有三种形态，文本提取全都拿不到：
 > Word 文档只是脚手架，**不是交付物**。最终输出仍然是 Markdown + PDF + 图片文件夹，层次结构和原来一样。
 
 ```bash
-SK=~/.claude/skills/translating-papers
+SK=~/.claude/skills/paper-translator
 python "$SK/pdf_to_docx.py" "<pdf>"          # auto：先 Acrobat，失败退 Word
 python "$SK/pdf_to_docx.py" --check          # 看本机有哪些转换器
 ```
@@ -86,7 +86,7 @@ python "$SK/docx_extract.py" "<docx>"
 脚本在 skill 目录下（全局安装）。Bash 用 `~`，PowerShell 用 `$env:USERPROFILE`：
 
 ```bash
-SK=~/.claude/skills/translating-papers
+SK=~/.claude/skills/paper-translator
 python "$SK/extract_paper.py" "<pdf>" -o "<tmp_dir>"
 ```
 

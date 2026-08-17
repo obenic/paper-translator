@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-"""UserPromptSubmit hook: force the translating-papers skill to be used.
+"""UserPromptSubmit hook: force the paper-translator skill to be used.
 
 Skill discovery is model judgment over the description field, so an
 unusually-worded request can slip past it. This hook reads the prompt and,
@@ -26,8 +26,8 @@ TARGET = re.compile(
     re.I)
 
 REMINDER = (
-    "用户请求翻译文献。必须调用 translating-papers skill（Skill 工具，"
-    "skill='translating-papers'），不要直接开始翻译。\n"
+    "用户请求翻译文献。必须调用 paper-translator skill（Skill 工具，"
+    "skill='paper-translator'），不要直接开始翻译。\n"
     "该 skill 的核心约束：PDF 里的图（独立整页图/正文内嵌图/矢量图表）不会出现在"
     "文本层里，只提取文本会交付一份看起来完整、实际漏图的译文；必须用 "
     "extract_paper.py 提取并通过图数量交叉校验，最后同时产出 Markdown 和 PDF。"
