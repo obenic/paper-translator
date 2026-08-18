@@ -160,7 +160,10 @@ pip install paddlepaddle paddleocr
 ```powershell
 git clone https://github.com/obenic/paper-translator.git `
   "$env:USERPROFILE\.claude\skills\paper-translator"
-pip install pymupdf
+pip install pymupdf lxml pillow numpy
+
+# Acrobat / Word 全自动导出（首选第一步，见上文）
+pip install pywin32
 
 # 可选：需要 OCR 时安装（约 1GB）
 pip install paddlepaddle paddleocr

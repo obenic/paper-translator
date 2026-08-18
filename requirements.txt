@@ -7,6 +7,7 @@ pillow>=10.0.0
 numpy>=1.24.0
 
 # PDF 转 Word（pdf_to_docx.py，仅 Windows，走 Acrobat / Word 的 COM 接口）
+# Acrobat Pro 全自动导出是默认第一步，装了它这条就该打开。
 # pywin32>=306
 
 # 可选：扫描件 OCR + 面板标签校验。约 1GB。
