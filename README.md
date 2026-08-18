@@ -13,12 +13,13 @@
 > **我不维护，也不处理 issue。** 用着不顺手就直接 fork 改成你喜欢的样子，代码 MIT 协议随便改随便发。
 >
 > 不过该测的都测过了，不是随手生成完就扔上来的：
-> - 真实的 24 页期刊论文全流程跑通
+> - 两篇真实期刊论文全流程跑通（Nature Commun. 24 页、Diamond & Related Materials 8 页双栏）
 > - 故意制造漏图场景，确认告警真的会拦下来（而不是个摆设）
 > - 矢量图表、正文内嵌图两种边缘场景各自构造 PDF 验证
 > - 提示词检测 8 条正例全中、6 条反例全部正确排除
+> - Acrobat 自动导出：两种 layout 模式各导一遍做结构对比；崩溃后恢复注册表的路径单独造场景验证
 >
-> 开发过程中还测出两个真实 bug 并修掉了：中文提示词因 Windows 编码问题全部漏检；正则的 `\b` 词边界在中文语境下失效。**没测就不敢说能用**——这条底线还是守住了。
+> 开发过程中还测出几个真实 bug 并修掉了：中文提示词因 Windows 编码问题全部漏检；正则的 `\b` 词边界在中文语境下失效；图注被转换器粘进正文时之后所有图编号整体错位一号；「一条图注都没抽到」曾被静默判为通过。**没测就不敢说能用**——这条底线还是守住了。
 
 ---
 
@@ -72,16 +73,31 @@
 
 > Word 文档只是脚手架，**不是交付物**。最终输出仍然是 Markdown + PDF + 图片文件夹。
 
-**Acrobat Pro 手动导出质量最好**（四步）：
+**Acrobat Pro 导出是全自动的**，质量也最好。唯一的人工动作是**首次运行批准一次 UAC**（把受信任脚本写进 Acrobat 安装目录），批准后永久生效，之后零交互：
 
+```powershell
+python pdf_to_docx.py <pdf>                  # auto：先 Acrobat，失败退 Word
+python pdf_to_docx.py --check                # 看本机准备好了没
+python pdf_to_docx.py --install-acrobat-js   # 单独装受信任脚本
 ```
-Acrobat 打开 PDF → File → Export To → Microsoft Word → Word Document
-保存对话框里点 Settings… → Layout Settings → 选「Retain Page Layout」
-```
 
-「Retain Page Layout」是关键；另一个选项「Retain Flowing Text」会重排页面、把图挪走。
+**导出用「Retain Flowing Text」，不是「Retain Page Layout」**（脚本默认已是前者，`--layout page` 可切换）。这跟直觉相反：Page Layout 把每块按视觉位置钉死，正文被打散成上百个文本框、每段写两遍（DrawingML + VML），**句子顺序还跨块错乱**——实测同一句变成「weakly allowed due to ┆ transitions22,23. Notably, ┆ orbital angular momentum mixing」，拿这种输入去翻译必然出错。Flowing Text 保住阅读顺序、标题层级和分段，图依然嵌在正文原位。
 
-**为什么不能自动调 Acrobat**：`doc.saveAs` 是特权方法，COM 外部调用一律被拒（报「尚未实现」）。标准绕法是装 folder-level 受信任脚本（`pdf_to_docx.py --install-acrobat-js`），但实测 Acrobat 25.x 不加载用户级 folder 脚本，应用级目录又需要管理员权限。所以自动化只能退到 Word。
+**自动化怎么打通的**：这条路此前被判定为不可能，实际是三个独立故障共用了同一句误导性的 COM 报错「尚未实现」(E_NOTIMPL)：
+
+| 坑 | 症状 | 处理 |
+|---|---|---|
+| pywin32 调用约定 | **任何** JSObject 方法都报 E_NOTIMPL，连非特权的 `getPageNumWords()` 都报 | 用纯 `DISPATCH_METHOD` 调用（pywin32 默认会附加 `DISPATCH_PROPERTYGET`，Acrobat 拒绝这个组合） |
+| folder 脚本位置 | 脚本装了却调不到 | Acrobat 25.x 只读**应用级** `<安装目录>\Javascripts\`，用户级 `%APPDATA%` 那个完全忽略；写应用级要提权，故走一次 UAC |
+| Protected Mode | `saveAs` **静默挂死**——不报错、不超时、无对话框 | 导出期间临时关沙箱，结束后写回原值 |
+
+第一条最误导：它看着像特权拒绝，其实与权限模型无关。
+
+> ⚠️ **它会改注册表**：导出期间把 `HKCU\...\Adobe Acrobat\DC\Privileged\bProtectedMode` 置 0，结束后写回；原值同时落盘到临时文件，进程被强杀也能在下次运行时补恢复。不想让它碰沙箱设置就用 `--engine word`。
+>
+> **不要以管理员身份运行 Acrobat 或本脚本**——只有那一次文件复制需要提权，提权进程与普通进程之间的 COM 连接会被 Windows 完整性级别隔离挡掉。
+
+实测环境：Acrobat Pro 25.1（Exchange-Pro）+ pywin32 311 + Windows 11。用户拒绝 UAC、没装 Acrobat Pro（Reader 不行）、或不在 Windows 上时，自动退到下面的 Word 路线。
 
 **Word COM 是自动兜底，质量差一档**：实测把双栏正文打散进 58 个文本框，还切在词中间（`ScienceDirec` + `t`），约 20% 段落断在句中，公式会散架。能用，但要有准备。
 
@@ -235,11 +251,18 @@ Skill 默认由模型读 `description` 判断是否调用——大多数时候�
 
 ```bash
 python pdf_to_docx.py <pdf> [-o out.docx] [--engine auto|acrobat|word]
-python pdf_to_docx.py --check                 # 看本机有哪些转换器
+                            [--layout flowing|page]
+python pdf_to_docx.py --check                 # 看本机准备好了没
 python pdf_to_docx.py --install-acrobat-js    # 一次性安装 Acrobat 受信任脚本
 ```
 
-`--engine auto` 先试 Acrobat，失败自动退 Word，并打印手动导出的四步。Windows only（依赖 COM）。
+`--engine auto` 先试 Acrobat（全自动，首次弹一次 UAC），失败自动退 Word。`--layout` 默认 `flowing`，见上方「首选路径」一节——`page` 会打乱句子顺序，只在需要视觉保真时用。Windows only（依赖 COM）。
+
+| 退出码 | 含义 |
+|---|---|
+| `0` | DOCX 已写出 |
+| `2` | 没有可用的转换器 — 跳过这一步，走 `extract_paper.py` |
+| `1` | 出错 |
 
 ### `docx_extract.py` — 从 Word 抽正文 + 图 + 图的位置
 
@@ -249,13 +272,18 @@ python docx_extract.py <docx> [-o OUTDIR]
 
 产出 `content.md`（正文按顺序，图的位置用 `[[FIG 2 -> media/fig02.jpg]]` 标出）、`content.json`、`media/`（图片按图号命名）、`manifest.json`。
 
-自动处理掉三个坑：
+自动处理掉四个坑：
 
 | 坑 | 处理 |
 |---|---|
 | 每段文字出现两遍 | Word 把文本框同时写成 DrawingML 和 VML 两份，跳过 `mc:Fallback` 子树 |
 | 出版商 logo 被当成图 1、图 2，真图全体错位两号 | 按像素尺寸滤掉页面装饰（Elsevier logo 只有 248×271，真图 ≥ 950） |
 | 图和它自己的图注在 XML 里离得很远 | Word 把浮动图锚在附近任意一段上，所以**按顺序配对**图与图注，不按距离 |
+| 某张图的图注被粘在正文段落尾部 | 该图号从图注清单消失，按清单配号会让**之后所有图整体错位一号**（图 4 的图片被写成 fig05，配上图 5 的图注）。图注数与图数不等时，改用正文引用到的图号列表配号 |
+
+对图做**三方交叉校验**——图注、图片、正文引用必须互相对得上，任何一条不符 exit 3：一张图注都没抽到（曾被静默判为通过）、有图注配不到图、正文引用的图号没有图注覆盖。
+
+**exit 3 不等于编号错了。** 图注被粘进正文那种情况，编号已按正文引用自动修正，但那条图注的文字仍散在正文段落里，要自己拼回来再翻译。`manifest.json` 的 `problems` 数组说明具体是哪一条不符。
 
 参考文献 / 致谢 / 声明类章节会自动标 `<!-- 不翻译 -->`。
 
@@ -344,9 +372,6 @@ OK: figure count consistent with text references.
 
 注意最后两行：OCR 出文字之后，**图数量交叉校验对扫描件也重新生效了**——没有文本层时这个校验是做不了的。
 
-OK: figure count consistent with text references.
-```
-
 ### `md_to_pdf.py` — Markdown 转 PDF
 
 ```bash
@@ -387,11 +412,11 @@ Markdown 输出用 pandoc 的 `implicit_figures`，把图和图注编译成 `<fi
 ## 已知限制
 
 - **翻译质量不由本项目保证**——脚本只管流程完整性，译文对错取决于模型，必须人工复核
-- **Acrobat 导出无法自动化**：`doc.saveAs` 是特权方法，COM 调用被拒；受信任 folder 脚本在 Acrobat 25.x 不加载，应用级目录需管理员权限。只能手动导出，或退到 Word（质量差一档）
+- **Acrobat 自动导出只在 Windows 上有**，且需要 Acrobat Pro（Reader 不行）。它会在导出期间临时关闭 Acrobat 的 Protected Mode 并写回原值；若沙箱被组策略（`HKLM\...\FeatureLockDown`）锁定，脚本关不掉，只能退到 Word
 - **Word 转换会把正文打散**：双栏论文实测约 20% 段落断在句中，公式会散架。这是「决策点」存在的原因——不满意就回退到 OCR/多模态路径
 - **不规则版式切不了面板**：`--layout` 只能表达「每行几个」。若某个面板跨两行（如 a 左上、b 右侧跨行、c 左下），退回整张图
 - **面板紧贴时会轻微串边**：并排的 SHAP force plot 之间没有空白，切点靠最小墨量猜，邻图的轴标题可能蹭进来；校验会报出来
-- **图注抓取率不是 100%**：实测两篇论文 5/6 与 3/4。抓不到只影响自动编号，不影响出图
+- **图注抓取率不是 100%**：实测两篇论文 5/6 与 3/4。转换器常把某条图注粘在正文段落尾部——此时编号已按正文引用自动修正，但图注文字要自己从正文里拼回来（脚本会 exit 3 点名是哪一条）
 - **OCR 会认错字**——公式、上下标、希腊字母、特殊符号尤其容易出错，扫描件译文更要逐句核对
 - 不装 OCR 时，纯文本模型遇到扫描件仍然无解（需多模态模型看图）
 - 交叉校验是启发式的：一页可能含多图，也可能一图跨页，数量不符时是**提示复查**而非断言出错

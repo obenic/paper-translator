@@ -27,8 +27,12 @@ Outputs into OUTDIR (default: <docx_stem>_docx next to the file):
     manifest.json  figure/caption/section census + completeness check
 
 Exit codes:
-    0  text and figures extracted, figure count consistent with the captions
-    3  extracted, but the counts disagree - LOOK BEFORE TRANSLATING
+    0  every figure is numbered, captioned, and consistent with the body text
+    3  extracted, but the three figure censuses disagree - LOOK BEFORE
+       TRANSLATING. The usual cause is a caption the converter glued onto the
+       tail of a body paragraph, so it never became a caption of its own; the
+       numbering is repaired from the citations but the caption text has to be
+       reassembled by hand out of the body paragraphs.
     1  error
 """
 
@@ -36,6 +40,7 @@ import argparse
 import json
 import os
 import re
+import shutil
 import sys
 import zipfile
 
@@ -199,6 +204,13 @@ def image_sizes(zf, records):
     return sizes
 
 
+def referenced_figures(records):
+    """Figure numbers the body text points at, Supplementary ones excluded."""
+    text = " ".join(r["text"] for r in records if "text" in r)
+    return sorted({int(n) for pre, n in REFERENCE_RE.findall(text)
+                   if not pre.strip() and 1 <= int(n) <= 30})
+
+
 def number_figures(zf, records):
     """Pair real figures with caption numbers, in document order.
 
@@ -225,7 +237,18 @@ def number_figures(zf, records):
 
     figures = [r for r in images if not rec_is_furniture(r)]
     captions = sorted({r["figure"] for r in records if r["kind"] == "caption"})
-    for rec, num in zip(figures, captions):
+    numbers = captions
+    if len(figures) != len(captions):
+        # A caption Acrobat glued onto the tail of a body paragraph never
+        # becomes its own record, so it drops out of `captions`. Zipping
+        # against the short list then shifts every later figure down one - Fig
+        # 4's image gets written out as fig05, and its caption lands on the
+        # wrong picture. The numbers the text cites are the better list
+        # whenever they account for exactly this many figures.
+        cited = referenced_figures(records)
+        if len(cited) == len(figures):
+            numbers = cited
+    for rec, num in zip(figures, numbers):
         rec["figure"] = num
     return records
 
@@ -237,6 +260,10 @@ def rec_is_furniture(rec):
 def save_media(zf, records, out_dir):
     """Write every referenced image out, named by figure number where known."""
     media_dir = os.path.join(out_dir, "media")
+    # Clear it first: the collision guard below would otherwise append a
+    # counter to every name left over from a previous run (fig01 -> fig01_5),
+    # so re-extracting the same docx kept producing different filenames.
+    shutil.rmtree(media_dir, ignore_errors=True)
     os.makedirs(media_dir, exist_ok=True)
     seen, seq = {}, 0
     for rec in records:
@@ -328,12 +355,26 @@ def main():
             and r.get("translate", True)]
     skipped = [r for r in records if not r.get("translate", True)]
     chars = sum(len(r["text"]) for r in body)
-    referenced = sorted({int(n) for pre, n in REFERENCE_RE.findall(
-        " ".join(r["text"] for r in records if "text" in r))
-        if not pre.strip() and 1 <= int(n) <= 30})
+    referenced = referenced_figures(records)
 
     numbered = sorted({r["figure"] for r in images if r.get("figure")})
-    consistent = not captions or numbered == captions
+    # Three views of the same figure set have to agree: the captions, the
+    # images they were paired with, and what the body text points at. An empty
+    # caption list used to pass silently, which is the worst case to miss -
+    # captions are the only text that explains a figure.
+    problems = []
+    if not captions:
+        problems.append("no figure caption was extracted at all")
+    elif [n for n in captions if n not in numbered]:
+        # Only a caption with no image is a mismatch. More numbered images than
+        # captions is the glued-caption case above, already flagged separately.
+        problems.append(f"captions say Fig {captions} but the images map to "
+                        f"{numbered}")
+    uncaptioned = [n for n in referenced if n not in captions]
+    if uncaptioned:
+        problems.append(f"the text refers to Fig {uncaptioned}, which no "
+                        f"extracted caption covers")
+    consistent = not problems
 
     manifest = {
         "docx": os.path.abspath(args.docx),
@@ -347,6 +388,7 @@ def main():
         "translatable_chars": chars,
         "skipped_paragraphs": len(skipped),
         "consistent": consistent,
+        "problems": problems,
     }
     with open(os.path.join(out_dir, "manifest.json"), "w", encoding="utf-8") as f:
         json.dump(manifest, f, ensure_ascii=False, indent=2)
@@ -361,14 +403,16 @@ def main():
     print(f"referenced  : Fig {referenced or 'none'}")
     print(f"content     : {os.path.join(out_dir, 'content.md')}")
 
-    if not consistent:
-        print(f"\nWARNING: captions say Fig {captions} but the images map to "
-              f"{numbered}.")
+    if problems:
+        print()
+        for problem in problems:
+            print(f"WARNING: {problem}.")
         print("Open content.md, check each [[FIG n]] anchor against the "
               "captions, and fix the")
         print("numbering by hand before translating.")
         return 3
-    print("\nOK: every figure is numbered and sits where the original had it.")
+    print("\nOK: every figure is numbered, captioned, and sits where the "
+          "original had it.")
     return 0
 
 

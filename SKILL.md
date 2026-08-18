@@ -34,19 +34,31 @@ PDF 里的图有三种形态，文本提取全都拿不到：
 ```bash
 SK=~/.claude/skills/paper-translator
 python "$SK/pdf_to_docx.py" "<pdf>"          # auto：先 Acrobat，失败退 Word
-python "$SK/pdf_to_docx.py" --check          # 看本机有哪些转换器
+python "$SK/pdf_to_docx.py" --check          # 看本机准备好了没
 ```
 
-**Acrobat Pro 质量最好，但导出没法自动调用**：`doc.saveAs` 是特权方法，COM 外部调用一律被拒（报「尚未实现」）。标准绕法是装 folder-level 受信任脚本（`--install-acrobat-js`），但 Acrobat 25.x 不加载用户级 folder 脚本，应用级目录又需要管理员权限。所以：
+**Acrobat Pro 导出现在是全自动的，不需要让用户手动点菜单。** 唯一的人工动作是**首次运行时批准一次 UAC 弹窗**（要把受信任脚本写进 Acrobat 安装目录），批准后永久生效，之后每次导出零交互。脚本自己判断装没装，已装就不再弹。
 
-**让用户手动导出（四步，质量最好）：**
+弹窗出现时提醒用户点「是」。用户拒绝或不在场时，走 `--engine word` 兜底。
 
-```
-Acrobat Pro 打开 PDF → File → Export To → Microsoft Word → Word Document
-在保存对话框里点 Settings… → Layout Settings → 选「Retain Page Layout」
-```
+**不要以管理员身份运行 Acrobat 或本脚本。** 只有那一次文件复制需要提权，Acrobat 和 Python 都以普通用户运行——提权进程与普通进程之间的 COM 连接会被 Windows 的完整性级别隔离挡掉。
 
-「Retain Page Layout」是关键，另一个选项「Retain Flowing Text」会重排页面、把图挪走。
+打通这条路要同时绕过三个坑，脚本已全部处理，遇到相关报错时按此对照：
+
+| 坑 | 症状 | 处理 |
+|---|---|---|
+| pywin32 调用约定 | **任何** JSObject 方法都报「尚未实现」(E_NOTIMPL)，连非特权的 `getPageNumWords()` 都报 | 用纯 `DISPATCH_METHOD` 调用，见 `call()` |
+| folder 脚本位置 | 脚本装了却调不到（`AttributeError`，名字不存在） | Acrobat 25.x 只读**应用级** `<安装目录>\Javascripts\`，用户级 `%APPDATA%` 那个完全忽略；写应用级要提权 |
+| Protected Mode | `saveAs` **静默挂死**——不报错、不超时、无对话框 | 导出期间临时关沙箱，结束后自动恢复（进程被杀也能在下次运行时补恢复） |
+
+「尚未实现」这句报错最误导：它看着像特权拒绝，其实只是调用约定不对。三个坑叠在一起共用这一句报错，是这条路长期被判定为「无法自动化」的原因。
+
+**导出要用「Retain Flowing Text」，不是「Retain Page Layout」**（脚本默认已是前者，`--layout page` 可切换）。这跟直觉相反：
+
+- **Retain Page Layout** 把每块按视觉位置钉死，正文被打散成几百个文本框、每段写两遍（DrawingML + VML），**句子顺序还跨块错乱**。实测同一句变成「weakly allowed due to ┆ transitions22,23. Notably, ┆ orbital angular momentum mixing」——拿这种输入去翻译必然出错。
+- **Retain Flowing Text** 保住阅读顺序、标题层级和分段，图依然嵌在正文原位，正是 `docx_extract.py` 要的。
+
+只有需要视觉保真时才用 `page`。本 skill 的交付物是重新排版的 Markdown + PDF，不需要保真。
 
 **Word COM 是自动兜底，质量差一档**：实测把双栏正文打散进 58 个文本框，还切在词中间（`ScienceDirec` + `t`）。能用，但译文可能不连贯。
 
@@ -65,6 +77,17 @@ python "$SK/docx_extract.py" "<docx>"
 | 每段文字出现两遍 | Word 把文本框同时写成 DrawingML 和 VML 两份，跳过 `mc:Fallback` 子树 |
 | 出版商 logo 被当成图 1、图 2，真图全体错位两号 | 按像素尺寸滤掉页面装饰（Elsevier logo 只有 248×271，真图 ≥ 950） |
 | 图和它自己的图注在 XML 里离得很远 | Word 把浮动图锚在附近任意一段上，所以**按顺序配对**图与图注，不按距离 |
+| 某张图的图注被粘在正文段落尾部，没成为独立段落 | 该图号从图注清单里消失，按图注清单配号会让它**之后所有图整体错位一号**（图 4 的图片被命名成 fig05）。图注数与图数不等时，改用正文引用到的图号列表配号 |
+
+脚本对图做**三方交叉校验**——图注、图片、正文引用必须互相对得上，任何一条不符就 exit 3：
+
+| 校验 | 抓的是什么 |
+|---|---|
+| 有图注 | 一张图注都没抽到时不再静默放行（这是最该拦的情况：图注是唯一解释图的文字） |
+| 图注 ↔ 图片 | 每条图注都得配到一张图 |
+| 正文 ↔ 图注 | 正文引用的每个图号都得有图注覆盖 |
+
+**exit 3 不等于编号错了。** 图注被粘进正文那种情况，编号已按正文引用修正好（看 `content.md` 里的 `[[FIG n]]` 确认），但那条图注的文字仍散在正文段落里，要自己拼回来再翻译。`manifest.json` 的 `problems` 数组列出具体是哪一条不符。
 
 `content.md` 里 `<!-- 不翻译 -->` 标记的段落是参考文献/致谢/声明那些，翻译时跳过。
 
@@ -253,6 +276,12 @@ python -c "import fitz,re; d=fitz.open(r'<pdf>'); [print(i+1, re.findall(r'图\s
 
 | 问题 | 解决 |
 |------|------|
+| Acrobat 导出挂住不返回 | Protected Mode 又被打开了（Acrobat 更新会重置它）。`--check` 看它的值。若 `HKLM\...\FeatureLockDown` 有组策略锁定，脚本关不掉，只能改用 `--engine word` |
+| 报「folder script not loaded」 | 装脚本时 Acrobat 没完全退出。全部关掉再跑 `--install-acrobat-js` |
+| UAC 被拒绝，或用户不在场 | `--engine word` 兜底；或让用户手动导出（Settings → Layout Settings → Retain Flowing Text） |
+| 导出的正文句子顺序错乱 | 用成了 `--layout page`，改回默认 flowing |
+| `docx_extract.py` 报「no figure caption was extracted at all」 | 转换器把整篇图注都并进了正文。改用 `--layout page` 重导一次，或走第 1 步 |
+| 报「the text refers to Fig [N], which no extracted caption covers」 | 那条图注被粘在某个正文段落尾部。`Grep` 搜 `Fig. N` 找到碎片，拼回完整图注再翻译。图片编号脚本已自动修正，无需手改 |
 | 图数量告警，但确实只有 N 张图 | 一页可能含多图。查 manifest 确认后按实际情况继续 |
 | 引用了 Supplementary Fig.17 却没这张图 | 正常，SI 是独立文件；脚本已排除 Supplementary/Extended Data |
 | PDF 里作者名大段变斜体 | 作者行的 `*` 未转义，改 `\*` |
