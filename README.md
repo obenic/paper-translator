@@ -23,6 +23,29 @@
 
 ---
 
+> ### 🚨 装完先跑这一行，否则每条命令都报「找不到文件」
+>
+> `SKILL.md` 里所有脚本调用统一走 `$SK`，默认值是 `~/.claude/skills/paper-translator`。**前提是 `.py` 真的在那儿。**
+>
+> ```bash
+> SK=~/.claude/skills/paper-translator
+> ls "$SK"/*.py >/dev/null 2>&1 || echo "SK 不对：这个目录里没有脚本"
+> ```
+>
+> 打印出提示，说明你的装法把**本体放在了别处**，`~/.claude/skills/paper-translator/` 下只剩一个用来注册 `/paper-translator` 命令的 `SKILL.md`（桩文件）。常见于这几种情况：
+>
+> - 为了不占系统盘，本体放在别的盘（如 `D:\...\skills\paper-translator`），`~/.claude/skills/` 下只留桩
+> - 用 symlink / junction 指过去
+> - 走插件方式安装，实际落在 `~/.claude/plugins/` 下
+>
+> **改法：把 `$SK` 换成真正放着 `.py` 的那个目录**，其余命令一个字都不用动。桩文件正文里通常写明了真实路径。
+>
+> 同一个坑还影响下文「自动触发」那节的 hook——`command` 里 `hook_detect.py` 的路径同样要指向真实目录，不是桩目录。
+>
+> 按下文「安装」直接 `git clone` 到 `~/.claude/skills/paper-translator` 的标准装法不受影响，那行检查会静默通过。
+
+---
+
 > ### ⚠️ 使用前提，务必先读
 >
 > **1. 扫描件需要 OCR 或多模态模型，二选一**
@@ -202,7 +225,7 @@ pip install pywin32
 pip install paddlepaddle paddleocr
 ```
 
-装在 `~/.claude/skills/` 下是**全局生效**（任何目录都能用）；只想在某个项目里用就放到该项目的 `.claude/skills/` 下。
+装在 `~/.claude/skills/` 下是**全局生效**（任何目录都能用）；只想在某个项目里用就放到该项目的 `.claude/skills/` 下——**这种装法要按顶部警告把 `$SK` 改成该项目里的实际路径**。
 
 装好后新开一个 Claude Code 会话，说「翻译这篇文献」即可。
 
@@ -264,7 +287,7 @@ Skill 默认由模型读 `description` 判断是否调用——大多数时候�
 }
 ```
 
-> 路径请填绝对路径。已有其他配置的话，把 `hooks` 键**合并**进去，不要覆盖整个文件。
+> 路径请填绝对路径，且要指向**真正放着 `hook_detect.py` 的目录**（见顶部警告，桩目录里没有它）。已有其他配置的话，把 `hooks` 键**合并**进去，不要覆盖整个文件。
 
 `hook_detect.py` 要求**动作词 + 对象词同时出现**才触发，避免误伤：
 

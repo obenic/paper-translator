@@ -1,6 +1,6 @@
 ---
 name: paper-translator
-description: Use when the user asks to translate an academic paper, PDF, or foreign-language literature (e.g. "翻译这篇文献", "把PDF翻译成中文", "translate this paper", 上传英文文献要求翻译), including scanned PDFs and papers whose figures sit on separate pages.
+description: Use when the user asks to translate an academic paper, PDF, Word/.docx manuscript, or foreign-language literature (e.g. "翻译这篇文献", "把PDF翻译成中文", "translate this paper", 上传英文文献或 Word 论文要求翻译), including scanned PDFs and papers whose figures sit on separate pages.
 ---
 
 # 文献翻译
@@ -25,14 +25,26 @@ PDF 里的图有三种形态，文本提取全都拿不到：
 
 ## 流程
 
+**先把 `$SK` 指对，否则后面每条命令都会 `No such file`。** `$SK` 是本 skill 的**真实目录**——放着 `*.py` 的那个：
+
+```bash
+SK=~/.claude/skills/paper-translator                    # 常见位置（全局安装）
+ls "$SK"/*.py >/dev/null 2>&1 || echo "SK 不对：该目录没有脚本"
+```
+
+那一行检查不能跳。有些安装方式下 `~/.claude/skills/<name>/` 里**只有 `SKILL.md`**，是一个指向别处的注册桩；此时把 `$SK` 换成桩正文里写明的真实路径（例如本体放在别的盘）。PowerShell 用 `$env:USERPROFILE` 代替 `~`。
+
 ### 0. 首选：先把 PDF 转成 Word
 
-**这是默认第一步，不是可选项。** PDF 转 Word 的转换器已经替你解决了本 skill 最难的两件事：图以图片形式嵌进去了，而且**落在正文里它原本该在的位置**。拿到这个就不用再做图区检测、切面板、猜图该插哪，全省了。
+**这是默认第一步，不是可选项。** PDF 转 Word 的转换器已经替你解决了本 skill 最难的两件事：图以图片形式嵌进去了，而且**落在正文里它原本该在的位置**。拿到这个就不用再做图区检测、也不用猜图该插哪，全省了。
+
+**但面板还是要自己切。** 转换器给出的是一个图号一张文件（`media/fig02.jpg` = 整张 Fig 2），多面板图仍然是挤在一起的合成图，所以第 1.5 步对这条路同样适用。
 
 > Word 文档只是脚手架，**不是交付物**。最终输出仍然是 Markdown + PDF + 图片文件夹，层次结构和原来一样。
 
+**已经有 `.docx` 原件时**（用户直接给 Word 版论文，或自己导出过），跳过本步，直接从 0.1 开始——`docx_extract.py` 吃任意 `.docx`。
+
 ```bash
-SK=~/.claude/skills/paper-translator
 python "$SK/pdf_to_docx.py" "<pdf>"          # auto：先 Acrobat，失败退 Word
 python "$SK/pdf_to_docx.py" --check          # 看本机准备好了没
 ```
@@ -106,10 +118,9 @@ python "$SK/docx_extract.py" "<docx>"
 
 ### 1. 提取（回退路径：Word 转换不满意时才走）
 
-脚本在 skill 目录下（全局安装）。Bash 用 `~`，PowerShell 用 `$env:USERPROFILE`：
+脚本位置见「流程」开头的 `$SK`。
 
 ```bash
-SK=~/.claude/skills/paper-translator
 python "$SK/extract_paper.py" "<pdf>" -o "<tmp_dir>"
 ```
 
@@ -143,12 +154,15 @@ python "$SK/extract_paper.py" "<pdf>" -o "<tmp_dir>" --ocr
 
 **若当前模型不具备识图能力，且未启用 `--ocr`**，扫描件到此为止：如实告诉用户「本模型无法读取扫描件内容」，让用户改用 `--ocr`、换多模态模型，或提供文字版 PDF。**绝不允许根据文件名、页数或常识推测论文内容**——编造的译文比没有译文危害大得多。
 
-### 1.5 切分面板
+### 1.5 切分面板（两条路都要做）
 
-一张 `figures/pNN.png` 常常是十几个子图挤在一起。图注写的是「**a** 温度分布……**b** 皮尔逊热图……」，读者却只有一整块图可看，得自己数格子。所以**按 a/b/c 切开，每个面板配自己那句图注**。
+**这一步不属于回退路径，Word 路径同样要做。** 两条路拿到的都是整张合成图，只是文件位置不同：Word 路径是 `media/figNN.jpg`，提取路径是 `figures/pNN.png`。
+
+一张图常常是十几个子图挤在一起。图注写的是「**a** 温度分布……**b** 皮尔逊热图……」，读者却只有一整块图可看，得自己数格子。所以**按 a/b/c 切开，每个面板配自己那句图注**。
 
 ```bash
 python "$SK/panel_split.py" "<tmp_dir>/figures/p22.png" -o "<tmp_dir>/panels" --layout 4,3,4,3,1
+python "$SK/panel_split.py" "<out>/media/fig02.jpg"     -o "<out>/panels"  --layout 4,3,4,3,1   # Word 路径
 ```
 
 **`--layout` 是每行几个面板，必须自己看图数出来。** 这一步不能省：面板之间的行间距可以只有 4 px，而面板*内部*（图和刻度标签之间）的空白能有 30 px，纯靠像素分不出哪条是边界。你看一眼就知道的事，算法猜不到。
