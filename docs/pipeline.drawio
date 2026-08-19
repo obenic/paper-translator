@@ -1,0 +1,216 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<mxfile host="drawio" version="31.1.8">
+  <diagram name="paper-translator-pipeline">
+    <mxGraphModel dx="1200" dy="2100" grid="0" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="1240" pageHeight="2120" math="0" shadow="0">
+      <root>
+        <mxCell id="0" />
+        <mxCell id="1" parent="0" />
+
+        <mxCell id="60" value="paper-translator ｜ 论文翻译全流程" style="text;html=1;align=left;verticalAlign=middle;fontSize=22;fontStyle=1;fontFamily=Microsoft YaHei;fontColor=#333333;" vertex="1" parent="1">
+          <mxGeometry x="40" y="40" width="360" height="40" as="geometry" />
+        </mxCell>
+        <mxCell id="61" value="7 个脚本 · 2 条路径 · 1 个人工决策门 · 4 处 exit 3 拦截" style="text;html=1;align=left;verticalAlign=middle;fontSize=13;fontFamily=Microsoft YaHei;fontColor=#666666;" vertex="1" parent="1">
+          <mxGeometry x="40" y="84" width="360" height="26" as="geometry" />
+        </mxCell>
+
+        <mxCell id="2" value="&lt;b style=&quot;font-size:16px&quot;&gt;用户：「翻译这篇文献」&lt;/b&gt;&lt;br&gt;&lt;font style=&quot;font-size:12px&quot;&gt;输入：论文 PDF，或已有 .docx&lt;br&gt;触发：description 匹配 ／ hook_detect.py 钩子&lt;/font&gt;" style="ellipse;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;fontFamily=Microsoft YaHei;fontSize=13;" vertex="1" parent="1">
+          <mxGeometry x="420" y="40" width="380" height="90" as="geometry" />
+        </mxCell>
+
+        <mxCell id="3" value="&lt;b style=&quot;font-size:15px&quot;&gt;0. pdf_to_docx.py&lt;/b&gt;　&lt;font style=&quot;font-size:11px&quot;&gt;首选第一步&lt;/font&gt;&lt;br&gt;&lt;font style=&quot;font-size:12px&quot;&gt;PDF → Word：图以原位嵌进正文，省掉图区检测&lt;br&gt;Acrobat 全自动（首次 UAC×1）→ 失败自动退 Word COM&lt;br&gt;默认 --layout flowing（page 会打乱句子顺序）&lt;/font&gt;" style="rounded=1;arcSize=8;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontFamily=Microsoft YaHei;fontSize=13;" vertex="1" parent="1">
+          <mxGeometry x="420" y="180" width="380" height="110" as="geometry" />
+        </mxCell>
+
+        <mxCell id="4" value="&lt;b style=&quot;font-size:15px&quot;&gt;0.1 docx_extract.py&lt;/b&gt;&lt;br&gt;&lt;font style=&quot;font-size:12px&quot;&gt;抽正文 ＋ 图 ＋ 图在正文里的位置&lt;br&gt;→ content.md ・ media/ ・ manifest.json&lt;br&gt;图注 ↔ 图片 ↔ 正文引用 三方交叉校验&lt;/font&gt;" style="rounded=1;arcSize=8;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontFamily=Microsoft YaHei;fontSize=13;" vertex="1" parent="1">
+          <mxGeometry x="420" y="350" width="380" height="110" as="geometry" />
+        </mxCell>
+
+        <mxCell id="5" value="&lt;b style=&quot;font-size:16px&quot;&gt;★ 0.2 决策点（人工）&lt;/b&gt;&lt;br&gt;&lt;font style=&quot;font-size:14px&quot;&gt;抽出来的正文干净吗？&lt;/font&gt;&lt;br&gt;&lt;font style=&quot;font-size:11px&quot;&gt;必须问用户，不许自己替他决定&lt;/font&gt;" style="rhombus;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;strokeWidth=3;fontFamily=Microsoft YaHei;fontSize=13;" vertex="1" parent="1">
+          <mxGeometry x="420" y="520" width="380" height="150" as="geometry" />
+        </mxCell>
+
+        <mxCell id="6" value="&lt;b style=&quot;font-size:15px&quot;&gt;1.5 panel_split.py&lt;/b&gt;　&lt;font style=&quot;font-size:11px&quot;&gt;两条路都要做&lt;/font&gt;&lt;br&gt;&lt;font style=&quot;font-size:12px&quot;&gt;按 a／b／c 切面板，每个面板配自己那句图注&lt;br&gt;--layout 是每行几个面板，必须看图数出来&lt;br&gt;OCR 五重校验：标签・留白・墨量・文字・图注数&lt;/font&gt;" style="rounded=1;arcSize=8;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontFamily=Microsoft YaHei;fontSize=13;" vertex="1" parent="1">
+          <mxGeometry x="420" y="1130" width="380" height="110" as="geometry" />
+        </mxCell>
+
+        <mxCell id="7" value="&lt;b style=&quot;font-size:15px&quot;&gt;2－3. 翻译 ＋ 写 Markdown&lt;/b&gt;　&lt;font style=&quot;font-size:11px&quot;&gt;模型执行，无脚本&lt;/font&gt;&lt;br&gt;&lt;font style=&quot;font-size:12px&quot;&gt;分批 8–10 页，译完追加写入，避免上下文溢出&lt;br&gt;图注必须写进 ![...] 方括号内，不能作独立段落&lt;br&gt;参考文献／致谢不译・图片本体不动&lt;/font&gt;" style="rounded=1;arcSize=8;whiteSpace=wrap;html=1;fillColor=#e1d5e7;strokeColor=#9673a6;fontFamily=Microsoft YaHei;fontSize=13;" vertex="1" parent="1">
+          <mxGeometry x="420" y="1300" width="380" height="110" as="geometry" />
+        </mxCell>
+
+        <mxCell id="8" value="&lt;b style=&quot;font-size:15px&quot;&gt;3.5 insert_figures.py&lt;/b&gt;&lt;br&gt;&lt;font style=&quot;font-size:12px&quot;&gt;把图从文末搬到正文第一次提到它的段落之后&lt;br&gt;「补充图 N」不算提及；核对前后图片数量&lt;br&gt;Word 路径位置已由 0.1 给出，可跳过&lt;/font&gt;" style="rounded=1;arcSize=8;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontFamily=Microsoft YaHei;fontSize=13;" vertex="1" parent="1">
+          <mxGeometry x="420" y="1470" width="380" height="110" as="geometry" />
+        </mxCell>
+
+        <mxCell id="9" value="&lt;b style=&quot;font-size:15px&quot;&gt;4. md_to_pdf.py&lt;/b&gt;&lt;br&gt;&lt;font style=&quot;font-size:12px&quot;&gt;pandoc → 自包含 HTML（图片转 data URI）&lt;br&gt;→ Chrome／Edge 无头打印，不需要 LaTeX&lt;br&gt;图已内嵌，PDF 可单独发送&lt;/font&gt;" style="rounded=1;arcSize=8;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontFamily=Microsoft YaHei;fontSize=13;" vertex="1" parent="1">
+          <mxGeometry x="420" y="1640" width="380" height="110" as="geometry" />
+        </mxCell>
+
+        <mxCell id="10" value="&lt;b style=&quot;font-size:15px&quot;&gt;5. 完成前自检&lt;/b&gt;　&lt;font style=&quot;font-size:11px&quot;&gt;逐条确认，不能凭印象&lt;/font&gt;&lt;br&gt;&lt;font style=&quot;font-size:12px&quot;&gt;各步退出码为 0 ・ md 里 ![ 数量 == 面板总数&lt;br&gt;渲染 PDF 逐张核对「图 N 的图片」配「图 N 的图注」&lt;br&gt;图紧跟在提到它的正文后面 ・ 临时目录已删&lt;/font&gt;" style="rounded=1;arcSize=8;whiteSpace=wrap;html=1;fillColor=#e1d5e7;strokeColor=#9673a6;fontFamily=Microsoft YaHei;fontSize=13;" vertex="1" parent="1">
+          <mxGeometry x="420" y="1810" width="380" height="110" as="geometry" />
+        </mxCell>
+
+        <mxCell id="11" value="&lt;b style=&quot;font-size:15px&quot;&gt;交付&lt;/b&gt;　译文.md ＋ 译文.pdf ＋ 译文_figs/&lt;br&gt;&lt;font style=&quot;font-size:12px&quot;&gt;并告知：译文需人工复核，数据／单位／结论尤其要对照原文&lt;/font&gt;" style="ellipse;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;fontFamily=Microsoft YaHei;fontSize=13;" vertex="1" parent="1">
+          <mxGeometry x="420" y="1980" width="380" height="90" as="geometry" />
+        </mxCell>
+
+        <mxCell id="20" value="&lt;b style=&quot;font-size:15px&quot;&gt;1. extract_paper.py&lt;/b&gt;　&lt;font style=&quot;font-size:11px&quot;&gt;回退路径&lt;/font&gt;&lt;br&gt;&lt;font style=&quot;font-size:12px&quot;&gt;直接从 PDF 提文本层 ＋ 渲染图页&lt;br&gt;三种图形态都检测：整页图・内嵌图・矢量图&lt;br&gt;exit 3 ＝ 图数与正文引用对不上&lt;br&gt;→ 查 per_page，用 --pages 强制渲染&lt;/font&gt;" style="rounded=1;arcSize=8;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontFamily=Microsoft YaHei;fontSize=13;" vertex="1" parent="1">
+          <mxGeometry x="40" y="720" width="300" height="130" as="geometry" />
+        </mxCell>
+
+        <mxCell id="21" value="&lt;b&gt;扫描件？&lt;/b&gt;&lt;br&gt;&lt;font style=&quot;font-size:11px&quot;&gt;text_pages = 0&lt;/font&gt;" style="rhombus;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;fontFamily=Microsoft YaHei;fontSize=13;" vertex="1" parent="1">
+          <mxGeometry x="40" y="900" width="300" height="110" as="geometry" />
+        </mxCell>
+
+        <mxCell id="22" value="&lt;b&gt;装了 --ocr&lt;/b&gt;&lt;br&gt;&lt;b&gt;或模型能识图？&lt;/b&gt;" style="rhombus;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;fontFamily=Microsoft YaHei;fontSize=13;" vertex="1" parent="1">
+          <mxGeometry x="40" y="1060" width="300" height="110" as="geometry" />
+        </mxCell>
+
+        <mxCell id="23" value="&lt;b style=&quot;font-size:14px&quot;&gt;停止，如实告知用户&lt;/b&gt;&lt;br&gt;&lt;font style=&quot;font-size:12px&quot;&gt;让用户改用 --ocr、换多模态模型，或提供文字版 PDF&lt;br&gt;&lt;b&gt;绝不允许凭文件名／页数推测论文内容&lt;/b&gt;&lt;/font&gt;" style="rounded=1;arcSize=8;whiteSpace=wrap;html=1;fillColor=#f8cecc;strokeColor=#b85450;fontFamily=Microsoft YaHei;fontSize=13;" vertex="1" parent="1">
+          <mxGeometry x="40" y="1220" width="300" height="100" as="geometry" />
+        </mxCell>
+
+        <mxCell id="30" value="&lt;b&gt;前置：$SK 指向哪&lt;/b&gt;&lt;br&gt;&lt;font style=&quot;font-size:12px&quot;&gt;必须是真正放着 *.py 的目录。&lt;br&gt;有些装法下 ~/.claude/skills/ 里只有一个注册桩 SKILL.md，&lt;br&gt;指错则每条命令都报「找不到文件」。&lt;/font&gt;" style="shape=note;size=18;whiteSpace=wrap;html=1;fillColor=#f5f5f5;strokeColor=#666666;align=left;verticalAlign=top;spacingLeft=10;spacingTop=4;fontFamily=Microsoft YaHei;fontSize=13;" vertex="1" parent="1">
+          <mxGeometry x="880" y="40" width="280" height="130" as="geometry" />
+        </mxCell>
+
+        <mxCell id="31" value="&lt;b&gt;exit 3｜三方校验没过&lt;/b&gt;&lt;br&gt;&lt;font style=&quot;font-size:12px&quot;&gt;图注／图片／正文引用对不上，&lt;br&gt;或一条图注都没抽到。&lt;br&gt;查 manifest.json 的 problems，&lt;br&gt;拼回图注再重跑。&lt;/font&gt;" style="rounded=1;arcSize=8;whiteSpace=wrap;html=1;fillColor=#f8cecc;strokeColor=#b85450;fontFamily=Microsoft YaHei;fontSize=13;" vertex="1" parent="1">
+          <mxGeometry x="880" y="350" width="280" height="110" as="geometry" />
+        </mxCell>
+
+        <mxCell id="32" value="&lt;b&gt;exit 3｜五重校验没过&lt;/b&gt;&lt;br&gt;&lt;font style=&quot;font-size:12px&quot;&gt;先看图再决定：&lt;br&gt;邻图轴标题蹭进来可以接受；&lt;br&gt;面板合并／顺序错则改 --layout 重来，&lt;br&gt;实在没空白就退回整张图。&lt;/font&gt;" style="rounded=1;arcSize=8;whiteSpace=wrap;html=1;fillColor=#f8cecc;strokeColor=#b85450;fontFamily=Microsoft YaHei;fontSize=13;" vertex="1" parent="1">
+          <mxGeometry x="880" y="1130" width="280" height="110" as="geometry" />
+        </mxCell>
+
+        <mxCell id="33" value="&lt;b&gt;exit 3｜有图找不到提及&lt;/b&gt;&lt;br&gt;&lt;font style=&quot;font-size:12px&quot;&gt;是漏译了引用句，&lt;br&gt;还是原文写的「见下图」？&lt;br&gt;补上引用再跑，别直接交付。&lt;/font&gt;" style="rounded=1;arcSize=8;whiteSpace=wrap;html=1;fillColor=#f8cecc;strokeColor=#b85450;fontFamily=Microsoft YaHei;fontSize=13;" vertex="1" parent="1">
+          <mxGeometry x="880" y="1470" width="280" height="110" as="geometry" />
+        </mxCell>
+
+        <mxCell id="40" value="图例" style="rounded=0;whiteSpace=wrap;html=1;fillColor=none;strokeColor=#666666;verticalAlign=top;fontStyle=1;align=left;spacingLeft=10;spacingTop=2;fontFamily=Microsoft YaHei;fontSize=13;" vertex="1" parent="1">
+          <mxGeometry x="40" y="1500" width="300" height="174" as="geometry" />
+        </mxCell>
+        <mxCell id="41" value="" style="rounded=0;html=1;fillColor=#d5e8d4;strokeColor=#82b366;" vertex="1" parent="40">
+          <mxGeometry x="12" y="30" width="30" height="16" as="geometry" />
+        </mxCell>
+        <mxCell id="42" value="起止" style="text;html=1;align=left;verticalAlign=middle;fontFamily=Microsoft YaHei;fontSize=12;" vertex="1" parent="40">
+          <mxGeometry x="52" y="28" width="230" height="20" as="geometry" />
+        </mxCell>
+        <mxCell id="43" value="" style="rounded=0;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;" vertex="1" parent="40">
+          <mxGeometry x="12" y="54" width="30" height="16" as="geometry" />
+        </mxCell>
+        <mxCell id="44" value="Python 脚本（本仓库 7 个）" style="text;html=1;align=left;verticalAlign=middle;fontFamily=Microsoft YaHei;fontSize=12;" vertex="1" parent="40">
+          <mxGeometry x="52" y="52" width="230" height="20" as="geometry" />
+        </mxCell>
+        <mxCell id="45" value="" style="rounded=0;html=1;fillColor=#e1d5e7;strokeColor=#9673a6;" vertex="1" parent="40">
+          <mxGeometry x="12" y="78" width="30" height="16" as="geometry" />
+        </mxCell>
+        <mxCell id="46" value="模型执行（翻译・自检）" style="text;html=1;align=left;verticalAlign=middle;fontFamily=Microsoft YaHei;fontSize=12;" vertex="1" parent="40">
+          <mxGeometry x="52" y="76" width="230" height="20" as="geometry" />
+        </mxCell>
+        <mxCell id="47" value="" style="rhombus;html=1;fillColor=#fff2cc;strokeColor=#d6b656;" vertex="1" parent="40">
+          <mxGeometry x="12" y="102" width="30" height="16" as="geometry" />
+        </mxCell>
+        <mxCell id="48" value="决策点（★ = 必须问用户）" style="text;html=1;align=left;verticalAlign=middle;fontFamily=Microsoft YaHei;fontSize=12;" vertex="1" parent="40">
+          <mxGeometry x="52" y="100" width="230" height="20" as="geometry" />
+        </mxCell>
+        <mxCell id="49" value="" style="rounded=0;html=1;fillColor=#f8cecc;strokeColor=#b85450;" vertex="1" parent="40">
+          <mxGeometry x="12" y="126" width="30" height="16" as="geometry" />
+        </mxCell>
+        <mxCell id="50" value="校验拦截 / 终止" style="text;html=1;align=left;verticalAlign=middle;fontFamily=Microsoft YaHei;fontSize=12;" vertex="1" parent="40">
+          <mxGeometry x="52" y="124" width="230" height="20" as="geometry" />
+        </mxCell>
+        <mxCell id="51" value="" style="shape=note;size=6;html=1;fillColor=#f5f5f5;strokeColor=#666666;" vertex="1" parent="40">
+          <mxGeometry x="12" y="150" width="30" height="16" as="geometry" />
+        </mxCell>
+        <mxCell id="52" value="前置说明" style="text;html=1;align=left;verticalAlign=middle;fontFamily=Microsoft YaHei;fontSize=12;" vertex="1" parent="40">
+          <mxGeometry x="52" y="148" width="230" height="20" as="geometry" />
+        </mxCell>
+
+        <mxCell id="100" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;strokeWidth=2;strokeColor=#4d4d4d;exitX=0.5;exitY=1;exitDx=0;exitDy=0;entryX=0.5;entryY=0;entryDx=0;entryDy=0;fontFamily=Microsoft YaHei;fontSize=12;" edge="1" parent="1" source="2" target="3">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="101" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;strokeWidth=2;strokeColor=#4d4d4d;exitX=0.5;exitY=1;exitDx=0;exitDy=0;entryX=0.5;entryY=0;entryDx=0;entryDy=0;fontFamily=Microsoft YaHei;fontSize=12;" edge="1" parent="1" source="3" target="4">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="102" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;strokeWidth=2;strokeColor=#4d4d4d;exitX=0.5;exitY=1;exitDx=0;exitDy=0;entryX=0.5;entryY=0;entryDx=0;entryDy=0;fontFamily=Microsoft YaHei;fontSize=12;" edge="1" parent="1" source="4" target="5">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+
+        <mxCell id="103" value="满意：直接翻译 content.md，跳过第 1 步" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;strokeWidth=2;strokeColor=#82b366;exitX=0.5;exitY=1;exitDx=0;exitDy=0;entryX=0.5;entryY=0;entryDx=0;entryDy=0;fontFamily=Microsoft YaHei;fontSize=12;labelBackgroundColor=#ffffff;verticalAlign=middle;" edge="1" parent="1" source="5" target="6">
+          <mxGeometry relative="1" as="geometry">
+            <mxPoint as="offset" x="0" y="-160" />
+          </mxGeometry>
+        </mxCell>
+
+        <mxCell id="104" value="不满意：丢弃 Word" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;strokeWidth=2;strokeColor=#d79b00;exitX=0;exitY=0.5;exitDx=0;exitDy=0;entryX=0.75;entryY=0;entryDx=0;entryDy=0;fontFamily=Microsoft YaHei;fontSize=12;labelBackgroundColor=#ffffff;" edge="1" parent="1" source="5" target="20">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="265" y="595" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+
+        <mxCell id="105" value="exit 2：本机没有可用转换器" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;strokeWidth=2;strokeColor=#d79b00;dashed=1;exitX=0;exitY=0.2;exitDx=0;exitDy=0;entryX=0.25;entryY=0;entryDx=0;entryDy=0;fontFamily=Microsoft YaHei;fontSize=12;labelBackgroundColor=#ffffff;" edge="1" parent="1" source="3" target="20">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="115" y="202" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+
+        <mxCell id="106" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;strokeWidth=2;strokeColor=#4d4d4d;exitX=0.5;exitY=1;exitDx=0;exitDy=0;entryX=0.5;entryY=0;entryDx=0;entryDy=0;fontFamily=Microsoft YaHei;fontSize=12;" edge="1" parent="1" source="20" target="21">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="107" value="是" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;strokeWidth=2;strokeColor=#4d4d4d;exitX=0.5;exitY=1;exitDx=0;exitDy=0;entryX=0.5;entryY=0;entryDx=0;entryDy=0;fontFamily=Microsoft YaHei;fontSize=12;labelBackgroundColor=#ffffff;" edge="1" parent="1" source="21" target="22">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="108" value="都没有" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;strokeWidth=2;strokeColor=#b85450;exitX=0.5;exitY=1;exitDx=0;exitDy=0;entryX=0.5;entryY=0;entryDx=0;entryDy=0;fontFamily=Microsoft YaHei;fontSize=12;labelBackgroundColor=#ffffff;" edge="1" parent="1" source="22" target="23">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+
+        <mxCell id="109" value="否：有文本层" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;strokeWidth=2;strokeColor=#4d4d4d;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=0.25;entryY=0;entryDx=0;entryDy=0;fontFamily=Microsoft YaHei;fontSize=12;labelBackgroundColor=#ffffff;" edge="1" parent="1" source="21" target="6">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="515" y="955" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+
+        <mxCell id="110" value="OCR ／ 识图后继续" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;strokeWidth=2;strokeColor=#4d4d4d;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=0;entryY=0.73;entryDx=0;entryDy=0;fontFamily=Microsoft YaHei;fontSize=12;labelBackgroundColor=#ffffff;" edge="1" parent="1" source="22" target="6">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="400" y="1115" />
+              <mxPoint x="400" y="1210" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+
+        <mxCell id="111" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;strokeWidth=2;strokeColor=#4d4d4d;exitX=0.5;exitY=1;exitDx=0;exitDy=0;entryX=0.5;entryY=0;entryDx=0;entryDy=0;fontFamily=Microsoft YaHei;fontSize=12;" edge="1" parent="1" source="6" target="7">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="112" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;strokeWidth=2;strokeColor=#4d4d4d;exitX=0.5;exitY=1;exitDx=0;exitDy=0;entryX=0.5;entryY=0;entryDx=0;entryDy=0;fontFamily=Microsoft YaHei;fontSize=12;" edge="1" parent="1" source="7" target="8">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="113" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;strokeWidth=2;strokeColor=#4d4d4d;exitX=0.5;exitY=1;exitDx=0;exitDy=0;entryX=0.5;entryY=0;entryDx=0;entryDy=0;fontFamily=Microsoft YaHei;fontSize=12;" edge="1" parent="1" source="8" target="9">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="114" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;strokeWidth=2;strokeColor=#4d4d4d;exitX=0.5;exitY=1;exitDx=0;exitDy=0;entryX=0.5;entryY=0;entryDx=0;entryDy=0;fontFamily=Microsoft YaHei;fontSize=12;" edge="1" parent="1" source="9" target="10">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="115" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;strokeWidth=2;strokeColor=#82b366;exitX=0.5;exitY=1;exitDx=0;exitDy=0;entryX=0.5;entryY=0;entryDx=0;entryDy=0;fontFamily=Microsoft YaHei;fontSize=12;" edge="1" parent="1" source="10" target="11">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+
+        <mxCell id="116" value="exit 3" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;strokeWidth=2;strokeColor=#b85450;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;fontFamily=Microsoft YaHei;fontSize=12;labelBackgroundColor=#ffffff;fontColor=#b85450;" edge="1" parent="1" source="4" target="31">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="117" value="exit 3" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;strokeWidth=2;strokeColor=#b85450;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;fontFamily=Microsoft YaHei;fontSize=12;labelBackgroundColor=#ffffff;fontColor=#b85450;" edge="1" parent="1" source="6" target="32">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="118" value="exit 3" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;strokeWidth=2;strokeColor=#b85450;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;fontFamily=Microsoft YaHei;fontSize=12;labelBackgroundColor=#ffffff;fontColor=#b85450;" edge="1" parent="1" source="8" target="33">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+
+      </root>
+    </mxGraphModel>
+  </diagram>
+</mxfile>
