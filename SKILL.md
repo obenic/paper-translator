@@ -34,6 +34,45 @@ ls "$SK"/*.py >/dev/null 2>&1 || echo "SK 不对：该目录没有脚本"
 
 那一行检查不能跳。有些安装方式下 `~/.claude/skills/<name>/` 里**只有 `SKILL.md`**，是一个指向别处的注册桩；此时把 `$SK` 换成桩正文里写明的真实路径（例如本体放在别的盘）。PowerShell 用 `$env:USERPROFILE` 代替 `~`。
 
+### 0.0 环境自检：先确认这台机器干得了这活
+
+**这是第一条命令，比转 Word 更早。** 你的机器不等于别人的机器——Acrobat Pro、PaddleOCR、多模态识图是三件互不相干的事，而这三个里**必须至少有一个**。
+
+```bash
+python "$SK/preflight.py"                 # 当前模型不能识图时这样跑
+python "$SK/preflight.py" --multimodal    # 你自己能读图就加这个
+```
+
+**`--multimodal` 只能由你自己判断——脚本探测不到模型能力。** 你确实能读图（Read 工具吃 PNG）就加上；不确定就别加。虚报会让流程在最需要人眼的那一步失去唯一的兜底。
+
+三个能力各换来什么：
+
+| 能力 | 怎么检测的 | 有了它 | 没有它 |
+|---|---|---|---|
+| PDF→Word 转换器 | 注册表查 Acrobat / Word 的 COM 注册，Windows only | 图按原位嵌进正文，位置不用猜 | 退回 `insert_figures.py` 按「首次提及」猜位置 |
+| PaddleOCR | `paddleocr` + `paddle` 能否导入 | 读扫描件；用读回的 a/b/c 标签校验面板切分 | `panel_split.py` 只剩几何校验（`--no-ocr`） |
+| 多模态识图 | 你自己声明 | 看图确认切对了、图注配对没串 | 图注错位只能靠第 5 步那条 fitz 命令粗查 |
+
+**退出码：**
+
+| 码 | 含义 | 怎么办 |
+|---|---|---|
+| `0` | 至少一个能力可用 | 读 verdict 段落，它逐条写明本机降档在哪，照着调整后续步骤 |
+| `1` | 连 PyMuPDF 都没有 | `pip install pymupdf` |
+| `4` | **三个能力全无** | 见下，不许绕 |
+
+**exit 4 的唯一正确处理：让用户装 PaddleOCR。**
+
+```bash
+pip install paddlepaddle paddleocr        # 约 1GB，一条命令
+```
+
+三者里 OCR 代价最小。为翻一篇论文现装 Acrobat Pro 不现实（体积、授权、时间都不划算），换多模态模型也不是人人说换就能换。
+
+**用户不装就停在这里。** 明确告诉他：这台机器上没有任何东西能验证图的活干对了没有，扫描件更是完全没戏，本 skill 不在这种状态下产出译文。**没有跳过参数，也不要自己发明绕法**——不要「先翻正文回头再说图」，不要偷偷退回整张图硬交付。半可信的译文比没有译文更糟：读者看不出错在哪。
+
+**报告开头那行解释器路径要看一眼。** venv 会遮住全局安装——包装在全局、命令跑在 venv 里，检测结果就是一串 MISSING，而这跟「没装」是两码事。后续每条 `python` 命令都要用报告里那个解释器。
+
 ### 0. 首选：先把 PDF 转成 Word
 
 **这是默认第一步，不是可选项。** PDF 转 Word 的转换器已经替你解决了本 skill 最难的两件事：图以图片形式嵌进去了，而且**落在正文里它原本该在的位置**。拿到这个就不用再做图区检测、也不用猜图该插哪，全省了。
@@ -126,7 +165,7 @@ python "$SK/extract_paper.py" "<pdf>" -o "<tmp_dir>"
 
 **扫描件处理：**
 
-脚本自动检测有无文本层。检测到扫描件（`text_pages: 0`）时两条路，选一条：
+脚本自动检测有无文本层。检测到扫描件（`text_pages: 0`）时两条路，选一条——**走哪条不用现场判断，0.0 的报告已经查清这台机器有没有 PaddleOCR，你也已经声明过能不能识图**：
 
 | 方式 | 命令 | 前提 |
 |---|---|---|
@@ -265,6 +304,7 @@ pandoc → 自包含 HTML（图片转 data URI）→ Chrome/Edge 无头打印。
 
 声称完成前逐条确认，不能凭印象：
 
+- [ ] **环境自检跑过**（`preflight.py` 退出码 0；exit 4 没解决就不该走到这一步）
 - [ ] **走了哪条路已经问过用户**（Word 转换满意 → 直接翻；不满意 → OCR/识图）
 - [ ] 提取脚本退出码 0（或告警已查证解决）
 - [ ] **切面板的退出码 0**（或退出码 3 已逐条看图查证）
@@ -290,6 +330,9 @@ python -c "import fitz,re; d=fitz.open(r'<pdf>'); [print(i+1, re.findall(r'图\s
 
 | 问题 | 解决 |
 |------|------|
+| `preflight.py` 报 exit 4 | 三个能力全无。让用户 `pip install paddlepaddle paddleocr`（三者里代价最小）；不装就停止，不要绕、不要只翻正文 |
+| `preflight.py` 说某个包 MISSING，但明明装过 | 跑的解释器不是装包那个。看报告开头的 interpreter 行——venv 会遮住全局安装 |
+| 转换器显示 ok，verdict 里却判 UNUSABLE | 缺 lxml。`docx_extract.py` 靠它解析 .docx，`pip install lxml` 即解 |
 | Acrobat 导出挂住不返回 | Protected Mode 又被打开了（Acrobat 更新会重置它）。`--check` 看它的值。若 `HKLM\...\FeatureLockDown` 有组策略锁定，脚本关不掉，只能改用 `--engine word` |
 | 报「folder script not loaded」 | 装脚本时 Acrobat 没完全退出。全部关掉再跑 `--install-acrobat-js` |
 | UAC 被拒绝，或用户不在场 | `--engine word` 兜底；或让用户手动导出（Settings → Layout Settings → Retain Flowing Text） |

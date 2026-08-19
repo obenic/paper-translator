@@ -1,3 +1,5 @@
+# 装完先跑一次 preflight.py，它会报出本机实际状态并拦下跑不动的组合。
+#
 # 必需
 pymupdf>=1.23.0
 lxml>=4.9.0
@@ -6,11 +8,16 @@ lxml>=4.9.0
 pillow>=10.0.0
 numpy>=1.24.0
 
+# 下面三样是「三选一」——至少要有一个，否则 preflight.py exit 4 直接停：
+#   1) pywin32 + Acrobat Pro / Word（仅 Windows）
+#   2) paddlepaddle + paddleocr
+#   3) 多模态模型（不是 pip 装的，跑 preflight.py 时加 --multimodal 声明）
+#
 # PDF 转 Word（pdf_to_docx.py，仅 Windows，走 Acrobat / Word 的 COM 接口）
 # Acrobat Pro 全自动导出是默认第一步，装了它这条就该打开。
 # pywin32>=306
 
-# 可选：扫描件 OCR + 面板标签校验。约 1GB。
+# 扫描件 OCR + 面板标签校验。约 1GB。三选一里代价最小的一个。
 # 实测版本 paddleocr 3.7.0 + paddlepaddle 3.3.1 (Python 3.13)。
 #   pip install paddlepaddle paddleocr
 # 脚本内部强制 enable_mkldnn=False，绕过部分 paddle 构建的 oneDNN 崩溃。

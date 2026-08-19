@@ -10,9 +10,11 @@
 
 ![paper-translator 全流程](docs/pipeline.png)
 
-蓝色是本仓库的 7 个 Python 脚本，紫色是模型干的活，黄色菱形是分支——**★ 那个必须停下来问用户**，不许自己替他决定；红色是校验拦截，任何一处 `exit 3` 没查证就不许往下走。
+蓝色是本仓库的 8 个 Python 脚本，紫色是模型干的活，黄色菱形是分支——**★ 那个必须停下来问用户**，不许自己替他决定；红色是校验拦截，任何一处 `exit 3` 没查证就不许往下走。
 
-主干只有一条：**PDF → Word → 抽正文和图 → 问用户 → 切面板 → 翻译 → 写 Markdown → 图归位 → 转 PDF → 自检**。左边那条 `extract_paper.py` 是回退路径，只在两种情况下走：Word 转换的结果用户不满意，或本机根本没有可用的转换器（`exit 2`）。两条路在 `panel_split.py` 汇合——**切面板是两条路都要做的**，因为转换器给的是一张合成图，不是一个个子图。
+**左上角那个 `0.0 preflight.py` 是第一条命令，也是一道硬门**：Acrobat/Word 转换器、PaddleOCR、多模态模型，三个里必须有一个，全无就 `exit 4` 停在那儿（细节见上方使用前提第 1 条）。
+
+主干只有一条：**环境自检 → PDF → Word → 抽正文和图 → 问用户 → 切面板 → 翻译 → 写 Markdown → 图归位 → 转 PDF → 自检**。左边那条 `extract_paper.py` 是回退路径，只在两种情况下走：Word 转换的结果用户不满意，或这台机器根本没有可用的转换器。两条路在 `panel_split.py` 汇合——**切面板是两条路都要做的**，因为转换器给的是一张合成图，不是一个个子图。
 
 > 图源文件 [docs/pipeline.drawio](docs/pipeline.drawio)，用 draw.io 打开可改。
 
@@ -60,17 +62,36 @@
 
 > ### ⚠️ 使用前提，务必先读
 >
-> **1. 扫描件需要 OCR 或多模态模型，二选一**
+> **1. Acrobat、PaddleOCR、多模态模型——三个里必须有一个。一个都没有就别用了 😡**
 >
-> 本 skill 只负责把图从 PDF 里挖出来、渲染、做数量校验——**理解图的内容不是脚本的事**。
+> 装完先跑这一行，它会当场告诉你这台机器到底能干什么：
 >
-> | 场景 | 需要什么 |
-> |---|---|
-> | 文字型 PDF 翻译 | 都不需要 — 正文走文本层，图原样搬运 |
-> | 扫描件翻译 | **`--ocr`**（装 PaddleOCR）**或**多模态模型看图，二选一 |
-> | 图注错位复核 | **多模态模型** — 要渲染 PDF 页面肉眼比对 |
+> ```bash
+> python preflight.py                 # 你用的模型不能识图
+> python preflight.py --multimodal    # 你用的模型能识图
+> ```
 >
-> 也就是说：纯文本模型配上 `--ocr` 也能处理扫描件，只是最后的图注复核仍需人眼或多模态模型。
+> 别人的机器不等于你的机器。这三样是三件互不相干的事，各自换来的东西也不一样：
+>
+> | 能力 | 有了它 | 没有它 |
+> |---|---|---|
+> | **PDF→Word 转换器**（Acrobat Pro 或 Word，Windows only） | 图按原位嵌进正文，位置不用猜 | 图的位置靠「首次提及」猜 |
+> | **PaddleOCR**（约 1GB） | 能读扫描件；能用读回的 a/b/c 标签校验面板切对没切错 | 面板切分只剩几何校验，切错了没人拦你 |
+> | **多模态模型** | 直接看图确认切对了、图注没配错 | 图注错位只能靠一条 fitz 命令粗查 |
+>
+> **三个全无 → `preflight.py` 直接 exit 4，到此为止。** 这不是脚本小气：这种机器上**没有任何东西**能验证图的活干对了没有，扫描件更是完全没戏。而「图不漏、图注不错位」正是这个项目唯一的存在理由——把它拿掉，剩下的只是一份读起来很顺、错在哪你看不出来的东西。
+>
+> **要救很简单，装 OCR，一条命令：**
+>
+> ```bash
+> pip install paddlepaddle paddleocr
+> ```
+>
+> 三个里就它代价最小。为了翻一篇论文现装 Acrobat Pro？体积、授权、时间，没一样划算，别折腾了 😅。换个多模态模型也行，那更快。
+>
+> **1GB 都不肯装，那就别用，我不惯着 😡** 没有跳过参数，也别问我怎么绕——绕过去的那份译文丢的是你自己的脸，不是我的。
+>
+> 补一句：**venv 会骗你。** 包装在全局、命令跑在 venv 里，`preflight.py` 报一串 MISSING——它报告开头那行解释器路径就是给你对这个用的，后面每条 python 命令都得用同一个。
 >
 > **2. 这是辅助工具，不是质检工具**
 >
@@ -184,20 +205,24 @@ python pdf_to_docx.py --install-acrobat-js   # 单独装受信任脚本
 
 ## 依赖
 
-| 用途 | 依赖 | 安装 |
-|---|---|---|
-| PDF 解析与渲染 | PyMuPDF | `pip install pymupdf` |
-| 读 Word 文档（首选路径） | lxml | `pip install lxml` |
-| 切分图面板 | Pillow + NumPy | `pip install pillow numpy` |
-| 调 Acrobat / Word 转换（Windows） | pywin32 | `pip install pywin32` |
-| 扫描件 OCR / 面板标签校验 | PaddleOCR | `pip install paddlepaddle paddleocr` |
-| 理解图内容 | 多模态模型 | 见上方使用前提 |
-| Markdown → HTML | pandoc ≥ 3.0 | [pandoc.org/installing](https://pandoc.org/installing.html) |
-| HTML → PDF | Chrome 或 Edge | 大多数系统已自带 |
+装完先跑 `python preflight.py`，它会把下面这张表在你机器上的实际状态打出来，并拦下跑不动的组合。
+
+| 用途 | 依赖 | 安装 | 必需性 |
+|---|---|---|---|
+| PDF 解析与渲染 | PyMuPDF | `pip install pymupdf` | **硬性**，没有它什么都读不了 |
+| 读 Word 文档（首选路径） | lxml | `pip install lxml` | 走 Word 路径必需 |
+| 切分图面板 | Pillow + NumPy | `pip install pillow numpy` | 切面板必需 |
+| 调 Acrobat / Word 转换（Windows） | pywin32 | `pip install pywin32` | **三选一之一** |
+| 扫描件 OCR / 面板标签校验 | PaddleOCR | `pip install paddlepaddle paddleocr` | **三选一之一** |
+| 理解图内容 | 多模态模型 | 见上方使用前提 | **三选一之一** |
+| Markdown → HTML | pandoc ≥ 3.0 | [pandoc.org/installing](https://pandoc.org/installing.html) | 只影响 PDF 输出 |
+| HTML → PDF | Chrome 或 Edge | 大多数系统已自带 | 只影响 PDF 输出 |
+
+标了「三选一之一」的三行，**至少要有一行成立**，否则 `preflight.py` exit 4 直接停掉——理由见上方使用前提第 1 条。
 
 **OCR 说明：**
 
-- **默认用不上**——文字型 PDF 直接读文本层，OCR 只在两种情况需要：扫描件（无文本层），或用 `panel_split.py` 切图面板时做标签校验
+- **不装 OCR 的前提是你有另外两个之一**（Acrobat/Word 转换器，或多模态模型）。文字型 PDF 的正文确实走文本层、用不到 OCR，但面板切分的标签校验用得到，扫描件更是非它不可
 - **安装体积约 1GB**，首次运行还会自动下载 OCR 模型（约 20MB，之后走缓存）
 - 用法：提取时加 `--ocr`；对文字型 PDF 加了也会被自动忽略，不会白跑
 - 实测版本：`paddleocr 3.7.0` + `paddlepaddle 3.3.1` + Python 3.13
@@ -217,10 +242,13 @@ Skill 目录结构与仓库根目录一致，直接 clone 到 skills 目录即�
 ```bash
 git clone https://github.com/obenic/paper-translator.git \
   ~/.claude/skills/paper-translator
-pip install pymupdf
+pip install pymupdf pillow numpy
 
-# 可选：需要 OCR 时安装（约 1GB）
+# 非 Windows 上没有 Acrobat / Word 转换器（COM 仅 Windows），
+# 所以 OCR 和多模态模型至少得有一个。模型不能识图就装 OCR（约 1GB）：
 pip install paddlepaddle paddleocr
+
+python ~/.claude/skills/paper-translator/preflight.py       # 最后跑一次确认
 ```
 
 **Windows (PowerShell)**
@@ -233,11 +261,15 @@ pip install pymupdf lxml pillow numpy
 # Acrobat / Word 全自动导出（首选第一步，见上文）
 pip install pywin32
 
-# 可选：需要 OCR 时安装（约 1GB）
+# 没有 Acrobat/Word、模型又不能识图时必装（约 1GB）
 pip install paddlepaddle paddleocr
+
+python "$env:USERPROFILE\.claude\skills\paper-translator\preflight.py"
 ```
 
 装在 `~/.claude/skills/` 下是**全局生效**（任何目录都能用）；只想在某个项目里用就放到该项目的 `.claude/skills/` 下——**这种装法要按顶部警告把 `$SK` 改成该项目里的实际路径**。
+
+**最后那行 `preflight.py` 不要省。** 它给你两个信息：三大能力有没有至少一个（没有就是 exit 4，装了也白装），以及**你刚才那些 pip 到底装进了哪个解释器**——venv 一开，全局装的包就被遮住了。
 
 装好后新开一个 Claude Code 会话，说「翻译这篇文献」即可。
 
@@ -251,7 +283,7 @@ pip install paddlepaddle paddleocr
 翻译桌面上的 example-paper.pdf
 ```
 
-Claude 会自动完成：转 Word → 抽正文与图 → **问你满不满意** → 分批翻译 → 写 Markdown → 图归位 → 转 PDF → 清理临时文件。
+Claude 会自动完成：**环境自检** → 转 Word → 抽正文与图 → **问你满不满意** → 分批翻译 → 写 Markdown → 图归位 → 转 PDF → 清理临时文件。
 
 产物：
 
@@ -316,7 +348,27 @@ Skill 默认由模型读 `description` 判断是否调用——大多数时候�
 
 ## 脚本说明
 
-七个脚本都可以脱离 Claude 单独当命令行工具用。
+八个脚本都可以脱离 Claude 单独当命令行工具用。
+
+### `preflight.py` — 环境自检（第一个跑的）
+
+```bash
+python preflight.py                 # 报告 + 判定
+python preflight.py --multimodal    # 调用方模型能读图
+python preflight.py --json          # 机器可读
+```
+
+检测 PyMuPDF / lxml / Pillow+NumPy / Acrobat 或 Word（查注册表，不启动应用）/ PaddleOCR（只查可导入，不真 import，省掉几秒和一堆警告）/ pandoc / Chrome-Edge，并打印**当前解释器路径**。
+
+`--multimodal` 是**调用方声明**的，脚本探测不到模型能力——这一项没法自动化，只能靠调用者诚实。
+
+| 退出码 | 含义 |
+|---|---|
+| `0` | 三大能力至少有一个可用；verdict 段落逐条写明降档在哪 |
+| `1` | PyMuPDF 缺失，什么都读不了 |
+| `4` | **三大能力全无**，流程终止 |
+
+判定里有一条不那么显然：**转换器装了但没有 lxml，不算可用能力**——`docx_extract.py` 靠 lxml 解析导出的 .docx，少了它 Word 路径会在下一步死掉。这种情况报告里照实显示 `ok`，但 verdict 里标 `UNUSABLE`。
 
 ### `pdf_to_docx.py` — PDF 转 Word（首选第一步）
 
@@ -489,7 +541,8 @@ Markdown 输出用 pandoc 的 `implicit_figures`，把图和图注编译成 `<fi
 - **面板紧贴时会轻微串边**：并排的 SHAP force plot 之间没有空白，切点靠最小墨量猜，邻图的轴标题可能蹭进来；校验会报出来
 - **图注抓取率不是 100%**：实测两篇论文 5/6 与 3/4。转换器常把某条图注粘在正文段落尾部——此时编号已按正文引用自动修正，但图注文字要自己从正文里拼回来（脚本会 exit 3 点名是哪一条）
 - **OCR 会认错字**——公式、上下标、希腊字母、特殊符号尤其容易出错，扫描件译文更要逐句核对
-- 不装 OCR 时，纯文本模型遇到扫描件仍然无解（需多模态模型看图）
+- **三大能力全无就跑不了**：`preflight.py` 在最前面拦下这种机器（exit 4），不是「降级运行」而是**直接停**。理由见使用前提第 1 条：这种状态下没有任何东西能验证图的活干对了没有
+- **`--multimodal` 靠调用方诚实**：脚本探测不到模型能力，只能由调用者声明。虚报的后果是流程以为有人眼兜底，实际没有
 - 交叉校验是启发式的：一页可能含多图，也可能一图跨页，数量不符时是**提示复查**而非断言出错
 - 中英文字体依赖系统已装的 Han 字体，缺失时回退到系统默认
 - `pdf_to_docx.py` 仅 Windows 可用（依赖 COM）；其余脚本跨平台
