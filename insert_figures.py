@@ -42,6 +42,12 @@ import sys
 
 IMAGE_RE = re.compile(r"^!\[(?P<alt>.*)\]\((?P<path>[^)]*)\)\s*$", re.S)
 HEADING_RE = re.compile(r"^#{1,6}\s")
+# A COMPLETE fenced block as split_chunks hands it over: same fence at both
+# ends. Display formulas in this skill's output are written this way. Matching
+# only complete blocks matters - a fence containing a blank line arrives as
+# several chunks, and carrying past just the opening one would drop the figure
+# inside the code block.
+FENCE_BLOCK = re.compile(r"^(```|~~~).*\1\s*$", re.S)
 # "图 2" / "图2a" / "Fig. 2" / "Figure 2b" - but not "图 20" when looking for 2.
 NUM_IN_TEXT = r"(?:图|图表|Fig(?:ure)?\.?)\s*{n}(?![0-9])"
 # A supplementary reference is not a mention of the main figure. Missing this
@@ -126,6 +132,24 @@ def mention_index(chunks, num, taken):
     return None
 
 
+def carry_past_display_block(chunks, idx):
+    """Push an insertion point past a display block that finishes the sentence.
+
+    A paragraph ending in "按下式估计：" plus the fenced formula under it is one
+    unit. Dropping a figure between them makes the prose promise an equation
+    and then show a plot instead - the figure is in the right place, the
+    sentence is not. Real case: Fig 3's first mention is the sentence that
+    introduces equation (1).
+
+    Only fenced blocks are carried, and only when the paragraph actually runs
+    into them (no blank-line-separated prose in between, which split_chunks
+    already guarantees), so a figure never drifts past unrelated content.
+    """
+    while idx + 1 < len(chunks) and FENCE_BLOCK.match(chunks[idx + 1].strip()):
+        idx += 1
+    return idx
+
+
 def relocate(text):
     """Move every figure block to its first mention. Returns (md, report)."""
     chunks, blocks = collect_blocks(split_chunks(text))
@@ -138,7 +162,8 @@ def relocate(text):
             report.append({"figure": num, "placed": False, "after": None})
             continue
         taken.add(idx)
-        placed.setdefault(idx, []).append(num)
+        at = carry_past_display_block(chunks, idx)
+        placed.setdefault(at, []).append(num)
         report.append({
             "figure": num,
             "placed": True,

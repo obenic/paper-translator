@@ -50,6 +50,10 @@ PANEL_PAD = 6
 BORDER_INK_FRAC = 0.02
 # Crops must jointly hold at least this share of the figure's ink.
 INK_KEEP_FRAC = 0.97
+# Share of one text run's ink that must land inside a single crop. Well under
+# 1.0 only to tolerate antialiasing on the crop seam; a text run that actually
+# fell in a gutter scores near 0, so the gap is enormous either way.
+TEXT_INK_KEEP = 0.95
 # Panel labels are set larger than tick labels; keep single glyphs at least
 # this tall relative to the median OCR box height.
 LABEL_MIN_HEIGHT_RATIO = 0.9
@@ -701,19 +705,65 @@ def validate(mask, boxes, labels, ocr, furniture=()):
         problems.append(f"crops hold only {kept / total_ink:.1%} of the figure's "
                         f"ink - something was dropped")
 
-    # 4. text conservation - every OCR box lands in some crop
+    # 4. text conservation - every OCR box's ink lands in some crop.
+    #
+    # The question is about ink, not about OCR's rectangle. A detection box is
+    # padded around the glyphs, and the text that matters here - panel labels
+    # and axis titles - sits hard against a panel's edge by construction, so
+    # its padded box always pokes a few pixels past the crop while every inked
+    # pixel is safely inside. Testing the rectangle made this check fire on 7
+    # boxes across 4 real figures with 100% of their ink inside a single crop
+    # each: all false, and enough noise to teach the operator to ignore exit 3.
+    # _holds_label already made this move for the label check; same reasoning.
+    #
+    # Real loss still trips it: a colour bar or legend that fell in a gutter
+    # has no ink in any crop at all, so it reports at ~0%.
     orphan_text = []
     if ocr:
+        covered_ink = mask & covered
         for b in ocr:
-            if any(_contains(box, b["box"]) for box in boxes.values()):
+            x0, y0, x1, y1 = b["box"]
+            x0, y0 = max(0, x0), max(0, y0)
+            total = int(mask[y0:y1, x0:x1].sum())
+            if not total:                       # OCR box with no ink in it
+                continue
+            kept_here = int(covered_ink[y0:y1, x0:x1].sum())
+            if kept_here >= TEXT_INK_KEEP * total:
                 continue
             if any(_contains(f, b["box"]) for f in furniture):
                 notes.append(f"page furniture ignored: {b['text']!r}")
                 continue
-            orphan_text.append(b["text"])
+            orphan_text.append(f"{b['text']!r} ({kept_here / total:.0%} of its "
+                               f"ink is inside a crop)")
         if orphan_text:
-            problems.append(f"{len(orphan_text)} OCR text boxes outside every "
-                            f"crop, e.g. {orphan_text[:6]}")
+            problems.append(f"{len(orphan_text)} text runs are not inside any "
+                            f"crop: {', '.join(orphan_text[:6])}")
+
+    # 5. does a crop hold text that belongs to the panel ABOVE it?
+    #
+    # A panel labels its own top-left corner, so nothing of its own can start
+    # above that label. Text that does is the previous row's x-axis title,
+    # stranded here because the row cut was taken above it instead of below.
+    # That happens when the two overlap vertically - Fig 4's "λ [nm]" spans
+    # y 756-826 while "(b)" spans 784-867 - and then NO horizontal cut is
+    # right: above the title steals it for this panel, below it steals this
+    # panel's own label. Such a figure cannot be split; use the whole image.
+    #
+    # Ink and text conservation both pass in this case (nothing left the
+    # figure), which is why this needs its own check.
+    for name, box in boxes.items():
+        lb = labels.get(name)
+        if not lb:
+            continue
+        strays = [b["text"] for b in ocr
+                  if b["box"] != lb and b["box"][1] < lb[1]
+                  and _holds_label(box, b["box"])]
+        if strays:
+            problems.append(
+                f"{name}: holds {strays[:3]} above its own '{name}' label - "
+                f"that text belongs to the panel above, so this row cut is "
+                f"wrong; if the label and that text overlap vertically the "
+                f"figure cannot be cut horizontally at all")
 
     return problems, {
         "ink_kept_frac": round(kept / total_ink, 4),

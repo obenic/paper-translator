@@ -116,8 +116,39 @@ def paragraph_text(node):
     return " ".join(text.split())
 
 
+def heading_level(block):
+    """Word's own heading level for a paragraph, or 0 if it is not a heading.
+
+    Acrobat's flowing export marks real section headings with pStyle
+    Heading1..9 - on a 7-page Elsevier paper it tagged exactly the nine
+    sections (Introduction ... References) and nothing else. That is a far
+    better signal than guessing from length, which promotes author lines,
+    "Keywords:", DOI URLs, broken formula fragments and even a mid-sentence
+    body line to headings.
+    """
+    pr = block.find(f"{W}pPr")
+    if pr is None:
+        return 0
+    style = pr.find(f"{W}pStyle")
+    if style is not None:
+        val = (style.get(f"{W}val") or "")
+        m = re.fullmatch(r"[Hh]eading\s*([1-9])", val)
+        if m:
+            return int(m.group(1))
+        if val.lower() in ("title", "subtitle"):
+            return 1
+    lvl = pr.find(f"{W}outlineLvl")
+    if lvl is not None:
+        try:
+            return min(9, int(lvl.get(f"{W}val")) + 1)
+        except (TypeError, ValueError):
+            return 0
+    return 0
+
+
 def walk_body(zf):
-    """Ordered stream of ('text', str) and ('image', media_path) records."""
+    """Ordered stream of ('text', str), ('heading', (level, str)) and
+    ('image', media_path) records."""
     from lxml import etree
 
     rels = image_rels(zf)
@@ -143,7 +174,9 @@ def walk_body(zf):
                 stream.append(("image", media))
         text = paragraph_text(block)
         if text:
-            stream.append(("text", text))
+            level = heading_level(block) if block.tag == f"{W}p" else 0
+            stream.append(("heading", (level, text)) if level
+                          else ("text", text))
     return stream
 
 
@@ -153,33 +186,46 @@ def classify(stream):
     'skip' is everything from a References/Acknowledgements-style heading to
     the end of that section - the user does not want those translated, and
     mistranslating a reference list is worse than leaving it in English.
+
+    Headings come from Word's own styles when the converter set any (see
+    heading_level). Only when the document carries no heading styles at all -
+    the Word COM fallback often does not - does the length guess take over,
+    and that guess is why a paragraph like "Because ODMR contrast originates
+    only from the NV- spin-" used to become a section heading.
     """
+    styled = any(kind == "heading" for kind, _ in stream)
     records, skipping = [], False
     for kind, value in stream:
         if kind == "image":
             records.append({"kind": "image", "media": value})
             continue
-        cap = CAPTION_START_RE.match(value)
-        if SKIP_SECTION_RE.match(value):
+        level, text = value if kind == "heading" else (0, value)
+        cap = CAPTION_START_RE.match(text)
+        if SKIP_SECTION_RE.match(text):
             skipping = True
-            records.append({"kind": "heading", "text": value, "translate": False,
-                            "section": "skip"})
+            records.append({"kind": "heading", "text": text, "translate": False,
+                            "level": level or 1, "section": "skip"})
             continue
         if cap:
             # Captions are translated. They carry the real explanation of a
             # figure - a 15-panel figure's caption runs several hundred words -
             # so leaving them in English hides most of the figure's meaning.
-            records.append({"kind": "caption", "text": value, "translate": True,
+            records.append({"kind": "caption", "text": text, "translate": True,
                             "figure": int(cap.group(1))})
             continue
         if skipping:
-            records.append({"kind": "text", "text": value, "translate": False,
+            records.append({"kind": "text", "text": text, "translate": False,
                             "section": "skip"})
             continue
-        short_heading = len(value) <= 60 and not value.endswith((".", "。", ";"))
+        if styled:
+            is_heading = kind == "heading"
+        else:
+            is_heading = (len(text) <= 60
+                          and not text.endswith((".", "。", ";")))
         records.append({
-            "kind": "heading" if short_heading else "text",
-            "text": value,
+            "kind": "heading" if is_heading else "text",
+            "text": text,
+            "level": level or 1,
             "translate": True,
         })
     return records
@@ -309,7 +355,10 @@ def render_markdown(records):
             lines.append(f"**CAPTION Fig {rec['figure']}** {rec['text']}")
         elif rec["kind"] == "heading":
             mark = "" if rec.get("translate", True) else "   <!-- 不翻译 -->"
-            lines.append(f"## {rec['text']}{mark}")
+            # Word's level 1 becomes ##: # is reserved for the paper title in
+            # the final translation.
+            hashes = "#" * min(6, rec.get("level", 1) + 1)
+            lines.append(f"{hashes} {rec['text']}{mark}")
         else:
             mark = "   <!-- 不翻译 -->" if not rec.get("translate", True) else ""
             lines.append(rec["text"] + mark)
