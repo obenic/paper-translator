@@ -10,11 +10,11 @@
 
 ![paper-translator 全流程](docs/pipeline.png)
 
-蓝色是本仓库的 8 个 Python 脚本，紫色是模型干的活，黄色菱形是分支——**★ 那个必须停下来问用户**，不许自己替他决定；红色是校验拦截，任何一处 `exit 3` 没查证就不许往下走。
+蓝色是本仓库的 9 个 Python 脚本，紫色是模型干的活，黄色菱形是分支——**★ 那个必须停下来问用户**，不许自己替他决定；红色是校验拦截，任何一处 `exit 3` 没查证就不许往下走。
 
 **左上角那个 `1.0 preflight.py` 是第一条命令，也是一道硬门**：Acrobat/Word 转换器、PaddleOCR、多模态模型，三个里必须有一个，全无就 `exit 4` 停在那儿（细节见上方使用前提第 1 条）。
 
-主干只有一条：**1.0 环境自检 → 2.0 转 Word → 2.1 抽正文和图 → 2.2 问用户 → 4.0 切面板 → 5.0 翻译 → 5.1 写 Markdown → 5.2 图归位 → 6.0 转 PDF → 7.0 自检**。左边那条 `3.0 extract_paper.py` 是回退路径，只在两种情况下走：2.2 用户对 Word 的结果不满意，或这台机器根本没有可用的转换器。两条路在 `4.0 panel_split.py` 汇合——**切面板是两条路都要做的**，因为转换器给的是一张合成图，不是一个个子图。
+主干只有一条：**1.0 环境自检 → 2.0 转 Word → 2.1 抽正文和图 → 2.2 问用户 → 4.0 切面板 → 5.0 翻译 → 5.1 写 Markdown → 5.2 图归位 → 5.3 加目录 → 6.0 转 PDF → 7.0 自检**。左边那条 `3.0 extract_paper.py` 是回退路径，只在两种情况下走：2.2 用户对 Word 的结果不满意，或这台机器根本没有可用的转换器。两条路在 `4.0 panel_split.py` 汇合——**切面板是两条路都要做的**，因为转换器给的是一张合成图，不是一个个子图。
 
 > 图源文件 [docs/pipeline.drawio](docs/pipeline.drawio)，用 draw.io 打开可改。
 
@@ -283,13 +283,13 @@ python "$env:USERPROFILE\.claude\skills\paper-translator\preflight.py"
 翻译桌面上的 example-paper.pdf
 ```
 
-Claude 会自动完成：**1.0 环境自检** → 2.0 转 Word → 2.1 抽正文与图 → **2.2 问你满不满意** → 5.0 分批翻译 → 5.1 写 Markdown → 5.2 图归位 → 6.0 转 PDF → 7.0 自检并清理临时文件。
+Claude 会自动完成：**1.0 环境自检** → 2.0 转 Word → 2.1 抽正文与图 → **2.2 问你满不满意** → 5.0 分批翻译 → 5.1 写 Markdown → 5.2 图归位 → 5.3 加目录 → 6.0 转 PDF → 7.0 自检并清理临时文件。
 
 产物：
 
 ```
-<原文标题> 中文翻译.md      # 依赖同级图片文件夹
-<原文标题> 中文翻译.pdf     # 图片已内嵌，可单独发送
+<原文标题> 中文翻译.md      # 依赖同级图片文件夹；开头带一个可刷新的「目录」块
+<原文标题> 中文翻译.pdf     # 图片已内嵌，可单独发送；标题页下方是目录页，侧边栏有书签树
 <原文标题> 中文翻译_figs/   # 图片（按图号命名，或按 a/b/c 面板命名）
 ```
 
@@ -348,7 +348,7 @@ Skill 默认由模型读 `description` 判断是否调用——大多数时候�
 
 ## 脚本说明
 
-八个脚本都可以脱离 Claude 单独当命令行工具用。
+九个脚本都可以脱离 Claude 单独当命令行工具用。
 
 ### `preflight.py` — 环境自检（1.0，第一个跑的）
 
@@ -497,13 +497,53 @@ OK: figure count consistent with text references.
 
 注意最后两行：OCR 出文字之后，**图数量交叉校验对扫描件也重新生效了**——没有文本层时这个校验是做不了的。
 
+### `add_toc.py` — 给译文加「目录」块（5.3）
+
+```bash
+python add_toc.py <译文.md> [--depth 3] [--include-figures] [--dry-run] [-o out.md]
+python add_toc.py <译文.md> --remove
+```
+
+一篇 24 页的译文在纯文本编辑器里打开是没有导航的。脚本在第一个 `##` 章节之前插入一个用 HTML 注释界定的块：
+
+```markdown
+<!-- TOC -->
+## 目录
+
+- [摘要](#摘要)
+- [1. 引言](#1-引言)
+  - [1.1 研究背景](#11-研究背景)
+<!-- /TOC -->
+```
+
+- **要在 `insert_figures.py` 之后跑**：归位会搬图块、删掉空掉的 `## 图` 小节，先加目录会留下对不上的旧目录
+- 锚点按 github-slugger 规则算（小写、去标点与符号、空格转 `-`、中文原样保留、重名加 `-1`），GitHub / VS Code 预览 / Obsidian 都点得动
+- **`### 图 N` 默认不列**——十几张图会把真正的章节埋掉；`--include-figures` 可以要
+- 幂等：反复跑只刷新那个块，不叠加、不多留空行；`--remove` 后能字节级还原
+- 写入用 LF、原文件留 `.bak`，与 `insert_figures.py` 一致
+- 退出码 `3` = 一个 `##` 都没找到，译文不该长这样，回去查
+
+> PDF 的目录由 `md_to_pdf.py` 自己生成，所以它会先把这个块剥掉再渲染——两个目录不会同时出现。
+
 ### `md_to_pdf.py` — Markdown 转 PDF（6.0）
 
 ```bash
 python md_to_pdf.py <input.md> [-o out.pdf] [--font serif|sans] [--keep-html]
+                    [--no-toc] [--toc-depth 3]
 ```
 
 pandoc → 自包含 HTML（图片转 data URI）→ Chrome/Edge 无头打印。中英文混排字体栈把拉丁字体排在前面，CJK 靠逐字符回退，避免中文字体渲染出难看的拉丁字形。
+
+**目录页和 PDF 书签默认都生成**，不需要额外参数。两者是独立的东西：
+
+| | 是什么 | 能不能点 |
+|---|---|---|
+| 目录页 | 标题页下方那一页「目录」，pandoc `--toc` 生成 | **不能**。Chrome 不把页内锚点转成 PDF 链接注释 |
+| PDF 书签 | 阅读器侧边栏的大纲树，Chrome `--generate-pdf-document-outline` 从各级标题建 | 能，PDF 里真正用来跳转的是这个 |
+
+- 书签树**包含** `图 N` 标题（方便跳到图），目录页**不包含**（否则图注标题灌满目录）
+- `--toc-depth 2` 只列到 `##`；`--no-toc` 两个都关
+- 末尾会报 `toc : N entries` 与 `outline : N bookmarks`；`outline: NONE` = 这个浏览器不认那个开关，目录页还在但没有书签树
 
 ### `hook_detect.py` — 提示词检测
 
@@ -547,6 +587,8 @@ Markdown 输出用 pandoc 的 `implicit_figures`，把图和图注编译成 `<fi
 - **`--multimodal` 靠调用方诚实**：脚本探测不到模型能力，只能由调用者声明。虚报的后果是流程以为有人眼兜底，实际没有
 - 交叉校验是启发式的：一页可能含多图，也可能一图跨页，数量不符时是**提示复查**而非断言出错
 - 中英文字体依赖系统已装的 Han 字体，缺失时回退到系统默认
+- **PDF 目录页不可点击**：Chrome 的 print-to-PDF 不把 `<a href="#...">` 转成 PDF 链接注释（实测 kind==1 的链接为 0 个）。所以 PDF 里的跳转靠侧边栏的书签树，目录页只是印出来的清单。想要可点的目录得换 LaTeX / Prince 一类的排版后端，那就得装 LaTeX，与本项目「不需要 LaTeX」的前提冲突
+- **md 目录的锚点是按 github-slugger 规则算的**，GitHub / VS Code / Obsidian 通用；用别的 slug 规则的渲染器（部分静态站生成器）可能点不动
 - `pdf_to_docx.py` 仅 Windows 可用（依赖 COM）；其余脚本跨平台
 - 主要在 Windows 11 + Python 3.13 上验证；macOS / Linux 路径已适配但未实机测试
 
