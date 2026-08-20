@@ -12,9 +12,9 @@
 
 蓝色是本仓库的 8 个 Python 脚本，紫色是模型干的活，黄色菱形是分支——**★ 那个必须停下来问用户**，不许自己替他决定；红色是校验拦截，任何一处 `exit 3` 没查证就不许往下走。
 
-**左上角那个 `0.0 preflight.py` 是第一条命令，也是一道硬门**：Acrobat/Word 转换器、PaddleOCR、多模态模型，三个里必须有一个，全无就 `exit 4` 停在那儿（细节见上方使用前提第 1 条）。
+**左上角那个 `1.0 preflight.py` 是第一条命令，也是一道硬门**：Acrobat/Word 转换器、PaddleOCR、多模态模型，三个里必须有一个，全无就 `exit 4` 停在那儿（细节见上方使用前提第 1 条）。
 
-主干只有一条：**环境自检 → PDF → Word → 抽正文和图 → 问用户 → 切面板 → 翻译 → 写 Markdown → 图归位 → 转 PDF → 自检**。左边那条 `extract_paper.py` 是回退路径，只在两种情况下走：Word 转换的结果用户不满意，或这台机器根本没有可用的转换器。两条路在 `panel_split.py` 汇合——**切面板是两条路都要做的**，因为转换器给的是一张合成图，不是一个个子图。
+主干只有一条：**1.0 环境自检 → 2.0 转 Word → 2.1 抽正文和图 → 2.2 问用户 → 4.0 切面板 → 5.0 翻译 → 5.1 写 Markdown → 5.2 图归位 → 6.0 转 PDF → 7.0 自检**。左边那条 `3.0 extract_paper.py` 是回退路径，只在两种情况下走：2.2 用户对 Word 的结果不满意，或这台机器根本没有可用的转换器。两条路在 `4.0 panel_split.py` 汇合——**切面板是两条路都要做的**，因为转换器给的是一张合成图，不是一个个子图。
 
 > 图源文件 [docs/pipeline.drawio](docs/pipeline.drawio)，用 draw.io 打开可改。
 
@@ -156,7 +156,7 @@ weakly allowed due to ┆ transitions22,23. Notably, ┆ orbital angular momentu
 
 ---
 
-## 首选路径：先把 PDF 转成 Word
+## 首选路径（2.0）：先把 PDF 转成 Word
 
 **这是默认第一步。** PDF→Word 的转换器已经替你解决了本项目最难的两件事：图以图片形式嵌进去了，而且**落在正文里它原本该在的位置**。拿到这个就不必再做图区检测、切面板、猜图该插到哪。
 
@@ -190,14 +190,14 @@ python pdf_to_docx.py --install-acrobat-js   # 单独装受信任脚本
 
 **Word COM 是自动兜底，质量差一档**：实测把双栏正文打散进 58 个文本框，还切在词中间（`ScienceDirec` + `t`），约 20% 段落断在句中，公式会散架。能用，但要有准备。
 
-### 决策点：满不满意，用户说
+### 决策点（2.2）：满不满意，用户说
 
 转换完、抽取完，**流程会停下来问你**：Word 那份文字干净吗？（带水印、扫描件、公式排版复杂的原件容易出乱码错字。）
 
 | 你的回答 | 走哪条路 |
 |---|---|
 | **满意** | 直接翻译抽取出的正文，**跳过 OCR / 多模态识图** |
-| **不满意** | 丢掉 Word，回退到 `extract_paper.py` + `--ocr` 或多模态识图 |
+| **不满意** | 丢掉 Word，回退到 3.0 `extract_paper.py` + `--ocr` 或多模态识图 |
 
 这一步是硬要求，不是可选项——转换失真是静默发生的，只有人眼能判断。
 
@@ -283,7 +283,7 @@ python "$env:USERPROFILE\.claude\skills\paper-translator\preflight.py"
 翻译桌面上的 example-paper.pdf
 ```
 
-Claude 会自动完成：**环境自检** → 转 Word → 抽正文与图 → **问你满不满意** → 分批翻译 → 写 Markdown → 图归位 → 转 PDF → 清理临时文件。
+Claude 会自动完成：**1.0 环境自检** → 2.0 转 Word → 2.1 抽正文与图 → **2.2 问你满不满意** → 5.0 分批翻译 → 5.1 写 Markdown → 5.2 图归位 → 6.0 转 PDF → 7.0 自检并清理临时文件。
 
 产物：
 
@@ -350,7 +350,7 @@ Skill 默认由模型读 `description` 判断是否调用——大多数时候�
 
 八个脚本都可以脱离 Claude 单独当命令行工具用。
 
-### `preflight.py` — 环境自检（第一个跑的）
+### `preflight.py` — 环境自检（1.0，第一个跑的）
 
 ```bash
 python preflight.py                 # 报告 + 判定
@@ -370,7 +370,7 @@ python preflight.py --json          # 机器可读
 
 判定里有一条不那么显然：**转换器装了但没有 lxml，不算可用能力**——`docx_extract.py` 靠 lxml 解析导出的 .docx，少了它 Word 路径会在下一步死掉。这种情况报告里照实显示 `ok`，但 verdict 里标 `UNUSABLE`。
 
-### `pdf_to_docx.py` — PDF 转 Word（首选第一步）
+### `pdf_to_docx.py` — PDF 转 Word（2.0，首选路径）
 
 ```bash
 python pdf_to_docx.py <pdf> [-o out.docx] [--engine auto|acrobat|word]
@@ -387,7 +387,7 @@ python pdf_to_docx.py --install-acrobat-js    # 一次性安装 Acrobat 受信�
 | `2` | 没有可用的转换器 — 跳过这一步，走 `extract_paper.py` |
 | `1` | 出错 |
 
-### `docx_extract.py` — 从 Word 抽正文 + 图 + 图的位置
+### `docx_extract.py` — 从 Word 抽正文 + 图 + 图的位置（2.1）
 
 ```bash
 python docx_extract.py <docx> [-o OUTDIR]
@@ -410,7 +410,7 @@ python docx_extract.py <docx> [-o OUTDIR]
 
 参考文献 / 致谢 / 声明类章节会自动标 `<!-- 不翻译 -->`。
 
-### `panel_split.py` — 把整张图切成 a/b/c 单个面板
+### `panel_split.py` — 把整张图切成 a/b/c 单个面板（4.0）
 
 ```bash
 python panel_split.py <figure.png> -o panels/ --layout 4,3,4,3,1 [--expect a-o]
@@ -420,19 +420,21 @@ python panel_split.py <figure.png> -o panels/ --no-ocr        # 只用几何校�
 
 **`--layout` 是每行几个面板，必须自己看图数出来。** 不给也能跑（自动模式），但经常数错——数错时脚本 exit 3 明说，不会假装成功。面板行间距可以只有 4 px，而面板*内部*（图和刻度标签之间）的空白能有 30 px，纯靠像素分不出哪条是边界。
 
-OCR 只做校验和命名，不做切分。五重校验任一不过就 exit 3：
+**`--expect` 建议默认带上**：图注列出的面板字母（`a-o` 或 `a,b,c`）就在抽出来的正文里，抄一遍就多一重校验。
 
-| 校验 | 抓的是什么 |
-|---|---|
-| 标签一致性 | OCR 读到的 `a`/`b`/`c` 必须落在按阅读顺序命名为同名的那张图里 |
-| 边框留白 | 每张图四周必须是背景色，有墨压边 = 内容被切断 |
-| 墨量守恒 | 所有面板加起来要覆盖整图 ~100% 的墨，少了 = 丢了色标/图例 |
-| 文字守恒 | 每个 OCR 文本框都要落进某张面板 |
-| 图注清单 | 图注里列出的面板数（`--expect`）必须和切出的张数一致 |
+OCR 只做校验和命名，不做切分。前四重总是跑，任一不过就 exit 3；第五重要传 `--expect` 才生效：
+
+| 校验 | 抓的是什么 | 何时生效 |
+|---|---|---|
+| 标签一致性 | OCR 读到的 `a`/`b`/`c` 必须落在按阅读顺序命名为同名的那张图里 | 总是（除 `--no-ocr`） |
+| 边框留白 | 每张图四周必须是背景色，有墨压边 = 内容被切断 | 总是 |
+| 墨量守恒 | 所有面板加起来要覆盖整图 ~100% 的墨，少了 = 丢了色标/图例 | 总是 |
+| 文字守恒 | 每个 OCR 文本框都要落进某张面板 | 总是（除 `--no-ocr`） |
+| 图注清单 | 图注声称的面板数必须等于切出的张数——**唯一不依赖图像本身的证人**，前四重都在看同一张图 | 仅传了 `--expect` 时 |
 
 OCR 读不出 `i`、`l`、`o` 是常态（细笔画），脚本会在 note 里说明，并靠其余标签的一致性给它们背书——这不算失败。
 
-### `insert_figures.py` — 把图移到正文第一次提到它的位置
+### `insert_figures.py` — 把图移到正文第一次提到它的位置（5.2）
 
 ```bash
 python insert_figures.py <译文.md> [--dry-run] [-o out.md]
@@ -444,7 +446,7 @@ python insert_figures.py <译文.md> [--dry-run] [-o out.md]
 
 > 走 Word 首选路径时，图的位置已经由 `docx_extract.py` 给出（比「首次提及」更准），这一步可以跳过；它主要服务于 `extract_paper.py` 回退路径。
 
-### `extract_paper.py` — 提取文本 + 图（回退路径）
+### `extract_paper.py` — 提取文本 + 图（3.0，回退路径）
 
 ```bash
 python extract_paper.py <pdf> [-o OUTDIR] [--dpi 200] [--max-width 1600] [--pages 21-24] [--ocr] [--ocr-lang en] [--split-panels]
@@ -495,7 +497,7 @@ OK: figure count consistent with text references.
 
 注意最后两行：OCR 出文字之后，**图数量交叉校验对扫描件也重新生效了**——没有文本层时这个校验是做不了的。
 
-### `md_to_pdf.py` — Markdown 转 PDF
+### `md_to_pdf.py` — Markdown 转 PDF（6.0）
 
 ```bash
 python md_to_pdf.py <input.md> [-o out.pdf] [--font serif|sans] [--keep-html]
