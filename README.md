@@ -534,7 +534,21 @@ python md_to_pdf.py <input.md> [-o out.pdf] [--font serif|sans] [--keep-html]
                     [--no-toc] [--toc-depth 3]
 ```
 
-pandoc → 自包含 HTML（图片转 data URI）→ Chrome/Edge 无头打印。中英文混排字体栈把拉丁字体排在前面，CJK 靠逐字符回退，避免中文字体渲染出难看的拉丁字形。
+pandoc → 自包含 HTML（图片转 data URI）→ Chrome/Edge 无头打印。
+
+**字体分工是定好的**（`--font sans` 只把正文中文换成黑体，其余不变）：
+
+| 位置 | 中文 | 拉丁字母・数字・ASCII 标点 |
+|---|---|---|
+| 正文、图注 | 宋体（SimSun） | Times New Roman |
+| 各级标题、题头 | **加粗黑体（SimHei）** | 加粗 Times New Roman |
+| 公式代码块 | — | Consolas 等宽（求和上下限靠等宽对齐） |
+
+实现靠 Chrome 逐字符解析 `font-family`：拉丁字体排最前，ASCII 全落到 Times，只有 CJK 码位向后落到汉字字体。汉字字体放前面的话，每个数字和括号都会拿到宋体那套打字机味的拉丁字形。
+
+- **全角标点（），。「」只能来自汉字字体**——Times New Roman 没有全角形，所以它们跟着中文走，这在排版上本来就对
+- **SimHei 无粗体字形**，Chrome 合成加粗，PDF 里是逐字 Type3，文件约 +12%（实测 3.2 → 3.6 MB），文字仍可搜索。要真粗体就把 `HEI` 的第一项换成 `"Microsoft YaHei"`
+- Markdown 那份不带字体信息（纯文本，由阅读器决定），字体只对 PDF 生效
 
 **目录页和 PDF 书签默认都生成**，不需要额外参数。两者是独立的东西：
 
@@ -589,7 +603,7 @@ Markdown 输出用 pandoc 的 `implicit_figures`，把图和图注编译成 `<fi
 - **三大能力全无就跑不了**：`preflight.py` 在最前面拦下这种机器（exit 4），不是「降级运行」而是**直接停**。理由见使用前提第 1 条：这种状态下没有任何东西能验证图的活干对了没有
 - **`--multimodal` 靠调用方诚实**：脚本探测不到模型能力，只能由调用者声明。虚报的后果是流程以为有人眼兜底，实际没有
 - 交叉校验是启发式的：一页可能含多图，也可能一图跨页，数量不符时是**提示复查**而非断言出错
-- 中英文字体依赖系统已装的 Han 字体，缺失时回退到系统默认
+- **字体依赖系统已装的字体**：宋体/黑体走 SimSun/SimHei（Windows 自带），macOS 走 Songti SC / Heiti SC，Linux 需要思源或 Noto CJK；都没有时回退到系统默认，中文可能变成另一种字形。拉丁部分要 Times New Roman，缺失时回退 Liberation Serif
 - **PDF 目录页不可点击**：Chrome 的 print-to-PDF 不把 `<a href="#...">` 转成 PDF 链接注释（实测 kind==1 的链接为 0 个）。所以 PDF 里的跳转靠侧边栏的书签树，目录页只是印出来的清单。想要可点的目录得换 LaTeX / Prince 一类的排版后端，那就得装 LaTeX，与本项目「不需要 LaTeX」的前提冲突
 - **md 目录的锚点是按 github-slugger 规则算的**，GitHub / VS Code / Obsidian 通用；用别的 slug 规则的渲染器（部分静态站生成器）可能点不动
 - `pdf_to_docx.py` 仅 Windows 可用（依赖 COM）；其余脚本跨平台

@@ -52,15 +52,29 @@ BROWSERS = [
     "/usr/bin/microsoft-edge",
 ]
 
-# Latin faces come first so ASCII uses a real text face; per-character
-# fallback then hands CJK to the Han fonts. Putting SimSun first would
-# render Latin with SimSun's poor typewriter-like glyphs.
+# Latin faces come first on purpose. Chrome resolves font-family per
+# character, so ASCII, digits and ASCII punctuation - ( ) [ ] - , . % - are
+# taken from Times New Roman, and only the CJK codepoints fall through to the
+# Han font behind it. Putting the Han font first would hand every digit and
+# bracket to SimSun's typewriter-ish Latin glyphs, which is what makes a
+# machine-translated paper look homemade.
+#
+# Fullwidth Chinese punctuation （），。「」 lives only in the Han font, so it
+# stays Chinese no matter what leads the stack - which is correct typography;
+# Times New Roman has no fullwidth forms to offer.
+LATIN = '"Times New Roman", Times, "Liberation Serif"'
+# 宋体 for running text, 黑体 for headings. SimSun/SimHei are the literal
+# Chinese names; the rest are the macOS and Linux equivalents so the same CSS
+# survives off Windows.
+SONG = 'SimSun, "Songti SC", "Source Han Serif SC", "Noto Serif CJK SC", serif'
+HEI = ('SimHei, "Heiti SC", "Microsoft YaHei", "Source Han Sans SC", '
+       '"Noto Sans CJK SC", sans-serif')
+
 FONTS = {
-    "serif": 'Georgia, "Times New Roman", "Source Han Serif SC", '
-             '"Noto Serif CJK SC", SimSun, serif',
-    "sans": '"Segoe UI", "Microsoft YaHei", "Source Han Sans SC", '
-            '"Noto Sans CJK SC", sans-serif',
+    "serif": f'{LATIN}, {SONG}',      # 正文：中文宋体 + 拉丁 Times
+    "sans": f'{LATIN}, {HEI}',        # 正文改黑体，拉丁仍 Times
 }
+HEAD_FONT = f'{LATIN}, {HEI}'         # 题头：中文黑体加粗 + 拉丁 Times
 
 CSS = """
 @page {{ size: A4; margin: 20mm 18mm; }}
@@ -70,12 +84,14 @@ body {{
   max-width: none; margin: 0;
   text-align: justify;
 }}
-h1 {{ font-family: {head_font}; font-size: 19pt; line-height: 1.4;
+h1 {{ font-family: {head_font}; font-size: 19pt; font-weight: 700;
+     line-height: 1.4;
      margin: 0 0 1.2em; padding-bottom: .4em; border-bottom: 2px solid #333; }}
-h2 {{ font-family: {head_font}; font-size: 14pt; margin: 1.8em 0 .7em;
+h2 {{ font-family: {head_font}; font-size: 14pt; font-weight: 700;
+     margin: 1.8em 0 .7em;
      padding-left: .5em; border-left: 4px solid #333; break-after: avoid; }}
-h3 {{ font-family: {head_font}; font-size: 11.5pt; margin: 1.3em 0 .5em;
-     break-after: avoid; }}
+h3 {{ font-family: {head_font}; font-size: 11.5pt; font-weight: 700;
+     margin: 1.3em 0 .5em; break-after: avoid; }}
 p {{ margin: 0 0 .8em; }}
 
 /* The Markdown supplies its own H1; pandoc's metadata title would duplicate it */
@@ -91,8 +107,12 @@ figure {{ break-inside: avoid; page-break-inside: avoid; margin: 1.4em 0; }}
    plus a five-line caption) overflows the page box, Chrome gives up, and the
    caption lands alone on the next page under nothing. */
 figure img {{ margin: 0 auto .5em; max-height: 72vh; width: auto; }}
-figcaption {{ font-size: 9pt; line-height: 1.65; color: #2a2a2a;
-             text-align: left; }}
+/* Captions are translated prose, so they follow the body rule: 中文宋体,
+   Latin and digits Times. Stated explicitly rather than left to inherit,
+   because the caption is the one place a reader compares Chinese against the
+   figure's own English labels. */
+figcaption {{ font-family: {body_font}; font-size: 9pt; line-height: 1.65;
+             color: #2a2a2a; text-align: left; }}
 img {{ max-width: 100%; height: auto; display: block; margin: .8em auto; }}
 
 blockquote {{
@@ -109,6 +129,9 @@ th {{ background: #eef0f3; font-family: {head_font}; }}
 
 code {{ font-family: Consolas, "Courier New", monospace; font-size: 9pt;
        background: #f0f1f3; padding: .1em .35em; border-radius: 3px; }}
+/* Fenced blocks stay monospace even though the body is Times: this skill
+   writes display formulas as ASCII art, and the sum limits above and below
+   the ∑ only line up in a fixed-width face. */
 pre {{ background: #f6f7f9; padding: .8em; overflow-x: auto;
       border-radius: 4px; break-inside: avoid; }}
 pre code {{ background: none; padding: 0; }}
@@ -237,7 +260,7 @@ def main():
     tmp = Path(tempfile.mkdtemp(prefix="md2pdf_"))
     css_file = tmp / "style.css"
     css_file.write_text(
-        CSS.format(body_font=FONTS[args.font], head_font=FONTS["sans"]),
+        CSS.format(body_font=FONTS[args.font], head_font=HEAD_FONT),
         encoding="utf-8")
     html = (md.with_suffix(".html") if args.keep_html else tmp / "doc.html")
 

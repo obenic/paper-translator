@@ -345,7 +345,22 @@ python "$SK/md_to_pdf.py" "<译文.md>"
 ```
 
 pandoc → 自包含 HTML（图片转 data URI）→ Chrome/Edge 无头打印。不需要 LaTeX。
-默认输出同名 `.pdf`；`--font sans` 可换黑体正文，`--keep-html` 保留中间 HTML 排查排版。
+默认输出同名 `.pdf`；`--font sans` 把正文中文换成黑体，`--keep-html` 保留中间 HTML 排查排版。
+
+**字体是定好的，不用管：**
+
+| 位置 | 中文 | 拉丁字母・数字・ASCII 标点 |
+|---|---|---|
+| 正文、图注 | 宋体（SimSun） | Times New Roman |
+| 各级标题、题头 | **加粗黑体（SimHei）** | 加粗 Times New Roman |
+| 公式代码块 | — | Consolas 等宽（∑ 上下的求和上下限只有等宽才对得齐） |
+
+靠的是 Chrome 逐字符解析 `font-family`：拉丁字体排在最前，ASCII 全部落到 Times，只有 CJK 码位才向后落到汉字字体。反过来把汉字字体放前面，每个数字和括号都会用上宋体那套打字机味的拉丁字形——机翻论文的「土气」多半来自这里。
+
+两点已知行为，不是故障：
+
+- **全角标点（），。「」只能来自汉字字体**，Times New Roman 里没有全角形，所以它们跟着中文走。这在排版上本来就是对的
+- **SimHei 没有粗体字形**，Chrome 用合成加粗，PDF 里表现为逐字 Type3 字体，文件大约 +12%（实测 3.2 → 3.6 MB）。文字仍可搜索（验证过）。想要真粗体就把 `md_to_pdf.py` 里 `HEI` 的第一项换成 `"Microsoft YaHei"`
 
 **目录页和 PDF 书签都是默认生成的，不用额外参数。** 两者互相独立：
 
