@@ -9,7 +9,7 @@
         <mxCell id="60" value="paper-translator ｜ 论文翻译全流程" style="text;html=1;align=left;verticalAlign=middle;fontSize=22;fontStyle=1;fontFamily=Microsoft YaHei;fontColor=#333333;" vertex="1" parent="1">
           <mxGeometry x="40" y="40" width="360" height="40" as="geometry" />
         </mxCell>
-        <mxCell id="61" value="9 个脚本 · 2 条路径 · 1 道能力门 · 1 个决策门 · 4 处 exit 3" style="text;html=1;align=left;verticalAlign=middle;fontSize=13;fontFamily=Microsoft YaHei;fontColor=#666666;" vertex="1" parent="1">
+        <mxCell id="61" value="8 个脚本 · 2 条路径 · 1 道能力门 · 1 个决策门 · 4 处 exit 3" style="text;html=1;align=left;verticalAlign=middle;fontSize=13;fontFamily=Microsoft YaHei;fontColor=#666666;" vertex="1" parent="1">
           <mxGeometry x="40" y="84" width="375" height="26" as="geometry" />
         </mxCell>
 
@@ -109,7 +109,7 @@
         <mxCell id="43" value="" style="rounded=0;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;" vertex="1" parent="40">
           <mxGeometry x="12" y="54" width="30" height="16" as="geometry" />
         </mxCell>
-        <mxCell id="44" value="Python 脚本（本仓库 9 个）" style="text;html=1;align=left;verticalAlign=middle;fontFamily=Microsoft YaHei;fontSize=12;" vertex="1" parent="40">
+        <mxCell id="44" value="Python 脚本（本仓库 8 个）" style="text;html=1;align=left;verticalAlign=middle;fontFamily=Microsoft YaHei;fontSize=12;" vertex="1" parent="40">
           <mxGeometry x="52" y="52" width="230" height="20" as="geometry" />
         </mxCell>
         <mxCell id="45" value="" style="rounded=0;html=1;fillColor=#e1d5e7;strokeColor=#9673a6;" vertex="1" parent="40">
