@@ -54,7 +54,7 @@
 >
 > **改法：把 `$SK` 换成真正放着 `.py` 的那个目录**，其余命令一个字都不用动。桩文件正文里通常写明了真实路径。
 >
-> 同一个坑还影响下文「自动触发」那节的 hook——`command` 里 `hook_detect.py` 的路径同样要指向真实目录，不是桩目录。
+> 桩方案下改了 `description` 要重新生成桩，否则模型读到的还是旧描述——详见下文「触发方式」。
 >
 > 按下文「安装」直接 `git clone` 到 `~/.claude/skills/paper-translator` 的标准装法不受影响，那行检查会静默通过。
 
@@ -307,42 +307,20 @@ Claude 会自动完成：**1.0 环境自检** → 2.0 转 Word → 2.1 抽正文
 
 ---
 
-## 自动触发（可选）
+## 触发方式
 
-Skill 默认由模型读 `description` 判断是否调用——大多数时候没问题，但措辞边缘可能漏。想要**确定性触发**，加一个 `UserPromptSubmit` hook：
+Skill 由模型读 `description` 判断是否调用，`description` 里已经写进了具体触发短语，覆盖「翻译 / 译成 / 译为 / 翻成 / 中译 / translate」×「文献 / 论文 / 期刊 / 全文 / 摘要 / PDF / paper / article / literature / manuscript」这些说法：
 
-编辑 `~/.claude/settings.json`：
-
-```json
-{
-  "hooks": {
-    "UserPromptSubmit": [
-      {
-        "hooks": [
-          {
-            "type": "command",
-            "command": "python \"<你的home>/.claude/skills/paper-translator/hook_detect.py\"",
-            "timeout": 10
-          }
-        ]
-      }
-    ]
-  }
-}
-```
-
-> 路径请填绝对路径，且要指向**真正放着 `hook_detect.py` 的目录**（见顶部警告，桩目录里没有它）。已有其他配置的话，把 `hooks` 键**合并**进去，不要覆盖整个文件。
-
-`hook_detect.py` 要求**动作词 + 对象词同时出现**才触发，避免误伤：
-
-| 触发 | 不触发 |
+| 会触发 | 不会触发 |
 |---|---|
 | 翻译这篇文献 | 翻译这段代码注释 |
 | 把这个 PDF 翻译成中文 | 这篇 paper 讲了什么 |
 | translate this paper | 总结一下这篇论文 |
-| 桌面那个英文文献翻译成中文 | 把变量名翻译成英文 |
+| 把期刊全文译为中文 | 把变量名翻译成英文 |
 
-改完需要重启 Claude Code，或打开一次 `/hooks` 让配置重新加载。
+> 早期版本另外提供过一个 `UserPromptSubmit` hook（`hook_detect.py`，正则强制触发）做确定性兜底。**该脚本已于 2026-08-21 删除**——它对路径很敏感（必须指向真实实现目录，桩目录里没有它），实际使用中会报错，收益不值那个麻烦。要找回实现看 git 历史。
+
+> 改了 `description` 之后，用桩方案的话记得重新生成桩，否则模型看到的还是旧描述。
 
 ---
 
@@ -560,10 +538,6 @@ pandoc → 自包含 HTML（图片转 data URI）→ Chrome/Edge 无头打印。
 - 书签树**包含** `图 N` 标题（方便跳到图），目录页**不包含**（否则图注标题灌满目录）
 - `--toc-depth 2` 只列到 `##`；`--no-toc` 两个都关
 - 末尾会报 `toc : N entries` 与 `outline : N bookmarks`；`outline: NONE` = 这个浏览器不认那个开关，目录页还在但没有书签树
-
-### `hook_detect.py` — 提示词检测
-
-读 stdin 的 hook JSON，命中则输出注入指令。异常输入一律静默退出 0，不会卡住你的对话。
 
 ---
 

@@ -1,6 +1,6 @@
 ---
 name: paper-translator
-description: Use when the user asks to translate an academic paper, PDF, Word/.docx manuscript, or foreign-language literature (e.g. "翻译这篇文献", "把PDF翻译成中文", "translate this paper", 上传英文文献或 Word 论文要求翻译), including scanned PDFs and papers whose figures sit on separate pages.
+description: Use when the user asks to translate an academic paper, PDF, Word/.docx manuscript, journal article, or foreign-language literature (e.g. "翻译这篇文献", "把PDF翻译成中文", "translate this paper", "把期刊全文译为中文", "摘要翻成中文", 中译某篇论文, 上传英文文献或 Word 论文要求翻译), including scanned PDFs and papers whose figures sit on separate pages.
 ---
 
 # 文献翻译
