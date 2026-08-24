@@ -36,9 +36,9 @@
 
 ---
 
-> ### 🚨 装完先跑这一行，否则每条命令都报「找不到文件」
+> ### 🚨 装完先跑这两行，否则命令要么报「找不到文件」，要么报一串 MISSING
 >
-> `SKILL.md` 里所有脚本调用统一走 `$SK`，默认值是 `~/.claude/skills/paper-translator`。**前提是 `.py` 真的在那儿。**
+> **第一行：`$SK` —— 脚本在哪。** `SKILL.md` 里所有脚本调用统一走 `$SK`，默认值是 `~/.claude/skills/paper-translator`。**前提是 `.py` 真的在那儿。**
 >
 > ```bash
 > SK=~/.claude/skills/paper-translator
@@ -56,18 +56,42 @@
 > 桩方案下改了 `description` 要重新生成桩，否则模型读到的还是旧描述——详见下文「触发方式」。
 >
 > 按下文「安装」直接 `git clone` 到 `~/.claude/skills/paper-translator` 的标准装法不受影响，那行检查会静默通过。
+>
+> **第二行：`$PY` —— 用哪个解释器。** 本文所有 `python` / `pip` 命令统一走 `$PY`，因为**裸 `python` 指向谁由 PATH 说了算，不由你说了算**：
+>
+> ```bash
+> PY=python                                  # 多数情况够用
+> echo "${VIRTUAL_ENV:-<none>}"              # 有值 = 当前在 venv 里，裸 python 就是 venv 那个
+> ```
+>
+> `$VIRTUAL_ENV` 打印出路径时**先别信裸 `python`**。venv 默认 `include-system-site-packages = false`，全局装的包它一个都看不到——于是 `preflight.py` 把依赖全报成 MISSING、甚至直接 exit 4，**而你明明装过**。这种误判和「真的没装」长得一模一样，很容易顺着报告再装一遍。列出候选解释器换一个：
+>
+> ```bash
+> py -0p                          # Windows：列出所有注册的解释器，带 * 的是当前
+> which -a python python3         # macOS / Linux
+> ```
+>
+> **判据只有一个：拿它跑 `preflight.py`，报告干净就是它。** 别拿「import 某个包成功」代替——venv 里往往恰好有 PyMuPDF 而缺 lxml/pywin32/paddleocr，单包探针会给你一个假的通过。定下来之后每条命令都用同一个，`preflight.py` 报告开头的 interpreter 行就是给你核对这件事的。
+>
+> **PowerShell 写法不一样**：`$PY = "python"`，调用时前面要加调用运算符 `&`（`& $PY preflight.py`）。`$PY` 存的是命令名，不加 `&` 只会把这行当字符串打印出来。
 
 ---
 
 > ### ⚠️ 使用前提，务必先读
 >
-> **1. Acrobat、PaddleOCR、多模态模型——三个里必须有一个。一个都没有就别用了 😡**
+> ---
+>
+> ## 1. Acrobat、PaddleOCR、多模态模型——三个里必须有一个
+>
+> ---
+>
+> **一个都没有就别用了 😡**
 >
 > 装完先跑这一行，它会当场告诉你这台机器到底能干什么：
 >
 > ```bash
-> python preflight.py                 # 你用的模型不能识图
-> python preflight.py --multimodal    # 你用的模型能识图
+> "$PY" preflight.py                 # 你用的模型不能识图
+> "$PY" preflight.py --multimodal    # 你用的模型能识图
 > ```
 >
 > 别人的机器不等于你的机器。这三样是三件互不相干的事，各自换来的东西也不一样：
@@ -83,14 +107,16 @@
 > **要救很简单，装 OCR，一条命令：**
 >
 > ```bash
-> pip install paddlepaddle paddleocr
+> "$PY" -m pip install paddlepaddle paddleocr        # -m pip 保证装进 $PY，不是别的解释器
 > ```
 >
 > 三个里就它代价最小。为了翻一篇论文现装 Acrobat Pro？体积、授权、时间，没一样划算，别折腾了 😅。换个多模态模型也行，那更快。
 >
 > **1GB 都不肯装，那就别用，我不惯着 😡** 没有跳过参数，也别问我怎么绕——绕过去的那份译文丢的是你自己的脸，不是我的。
 >
-> 补一句：**venv 会骗你。** 包装在全局、命令跑在 venv 里，`preflight.py` 报一串 MISSING——它报告开头那行解释器路径就是给你对这个用的，后面每条 python 命令都得用同一个。
+> 补一句：**venv 会骗你。** 包装在全局、命令跑在 venv 里，`preflight.py` 报一串 MISSING、甚至直接 exit 4——**这时候先别急着装那 1GB，回上面那个 🚨 块把 `$PY` 指对**。报告开头那行解释器路径就是给你核对这件事用的，后面每条命令都得用同一个。
+>
+> ---
 >
 > **2. 这是辅助工具，不是质检工具**
 >
@@ -164,9 +190,9 @@ weakly allowed due to ┆ transitions22,23. Notably, ┆ orbital angular momentu
 **Acrobat Pro 导出是全自动的**，质量也最好。唯一的人工动作是**首次运行批准一次 UAC**（把受信任脚本写进 Acrobat 安装目录），批准后永久生效，之后零交互：
 
 ```powershell
-python pdf_to_docx.py <pdf>                  # auto：先 Acrobat，失败退 Word
-python pdf_to_docx.py --check                # 看本机准备好了没
-python pdf_to_docx.py --install-acrobat-js   # 单独装受信任脚本
+& $PY pdf_to_docx.py <pdf>                  # auto：先 Acrobat，失败退 Word
+& $PY pdf_to_docx.py --check                # 看本机准备好了没
+& $PY pdf_to_docx.py --install-acrobat-js   # 单独装受信任脚本
 ```
 
 **导出用「Retain Flowing Text」，不是「Retain Page Layout」**（脚本默认已是前者，`--layout page` 可切换）。这跟直觉相反：Page Layout 把每块按视觉位置钉死，正文被打散成上百个文本框、每段写两遍（DrawingML + VML），**句子顺序还跨块错乱**——实测同一句变成「weakly allowed due to ┆ transitions22,23. Notably, ┆ orbital angular momentum mixing」，拿这种输入去翻译很可能出错。Flowing Text 保住阅读顺序、标题层级和分段，图依然嵌在正文原位。
@@ -204,15 +230,15 @@ python pdf_to_docx.py --install-acrobat-js   # 单独装受信任脚本
 
 ## 依赖
 
-装完先跑 `python preflight.py`，它会把下面这张表在你机器上的实际状态打出来，并拦下跑不动的组合。
+装完先跑 `"$PY" preflight.py`，它会把下面这张表在你机器上的实际状态打出来，并拦下跑不动的组合。
 
 | 用途 | 依赖 | 安装 | 必需性 |
 |---|---|---|---|
-| PDF 解析与渲染 | PyMuPDF | `pip install pymupdf` | **硬性**，没有它什么都读不了 |
-| 读 Word 文档（首选路径） | lxml | `pip install lxml` | 走 Word 路径必需 |
-| 切分图面板 | Pillow + NumPy | `pip install pillow numpy` | 切面板必需 |
-| 调 Acrobat / Word 转换（Windows） | pywin32 | `pip install pywin32` | **三选一之一** |
-| 扫描件 OCR / 面板标签校验 | PaddleOCR | `pip install paddlepaddle paddleocr` | **三选一之一** |
+| PDF 解析与渲染 | PyMuPDF | `"$PY" -m pip install pymupdf` | **硬性**，没有它什么都读不了 |
+| 读 Word 文档（首选路径） | lxml | `"$PY" -m pip install lxml` | 走 Word 路径必需 |
+| 切分图面板 | Pillow + NumPy | `"$PY" -m pip install pillow numpy` | 切面板必需 |
+| 调 Acrobat / Word 转换（Windows） | pywin32 | `"$PY" -m pip install pywin32` | **三选一之一** |
+| 扫描件 OCR / 面板标签校验 | PaddleOCR | `"$PY" -m pip install paddlepaddle paddleocr` | **三选一之一** |
 | 理解图内容 | 多模态模型 | 见上方使用前提 | **三选一之一** |
 | Markdown → HTML | pandoc ≥ 3.0 | [pandoc.org/installing](https://pandoc.org/installing.html) | 只影响 PDF 输出 |
 | HTML → PDF | Chrome 或 Edge | 大多数系统已自带 | 只影响 PDF 输出 |
@@ -241,13 +267,15 @@ Skill 目录结构与仓库根目录一致，直接 clone 到 skills 目录即�
 ```bash
 git clone https://github.com/obenic/paper-translator.git \
   ~/.claude/skills/paper-translator
-pip install pymupdf pillow numpy
+
+PY=python                       # 在 venv 里就换成真正要用的解释器，见顶部 🚨
+"$PY" -m pip install pymupdf pillow numpy
 
 # 非 Windows 上没有 Acrobat / Word 转换器（COM 仅 Windows），
 # 所以 OCR 和多模态模型至少得有一个。模型不能识图就装 OCR（约 1GB）：
-pip install paddlepaddle paddleocr
+"$PY" -m pip install paddlepaddle paddleocr
 
-python ~/.claude/skills/paper-translator/preflight.py       # 最后跑一次确认
+"$PY" ~/.claude/skills/paper-translator/preflight.py       # 最后跑一次确认
 ```
 
 **Windows (PowerShell)**
@@ -255,20 +283,22 @@ python ~/.claude/skills/paper-translator/preflight.py       # 最后跑一次确
 ```powershell
 git clone https://github.com/obenic/paper-translator.git `
   "$env:USERPROFILE\.claude\skills\paper-translator"
-pip install pymupdf lxml pillow numpy
+
+$PY = "python"                  # 在 venv 里就换成真正要用的解释器，见顶部 🚨
+& $PY -m pip install pymupdf lxml pillow numpy
 
 # Acrobat / Word 全自动导出（首选第一步，见上文）
-pip install pywin32
+& $PY -m pip install pywin32
 
 # 没有 Acrobat/Word、模型又不能识图时必装（约 1GB）
-pip install paddlepaddle paddleocr
+& $PY -m pip install paddlepaddle paddleocr
 
-python "$env:USERPROFILE\.claude\skills\paper-translator\preflight.py"
+& $PY "$env:USERPROFILE\.claude\skills\paper-translator\preflight.py"
 ```
 
 装在 `~/.claude/skills/` 下是**全局生效**（任何目录都能用）；只想在某个项目里用就放到该项目的 `.claude/skills/` 下——**这种装法要按顶部警告把 `$SK` 改成该项目里的实际路径**。
 
-**最后那行 `preflight.py` 不要省。** 它给你两个信息：三大能力有没有至少一个（没有就是 exit 4，装了也白装），以及**你刚才那些 pip 到底装进了哪个解释器**——venv 一开，全局装的包就被遮住了。
+**最后那行 `preflight.py` 不要省。** 它给你两个信息：三大能力有没有至少一个（没有就是 exit 4，装了也白装），以及**你刚才那些 pip 到底装进了哪个解释器**——报告开头的 interpreter 行必须和你定的 `$PY` 是同一个，否则查的是一个解释器、跑的是另一个。
 
 装好后新开一个 Claude Code 会话，说「翻译这篇文献」即可。
 
@@ -328,9 +358,9 @@ Skill 由模型读 `description` 判断是否调用，`description` 里已经写
 ### `preflight.py` — 环境自检（1.0，第一个跑的）
 
 ```bash
-python preflight.py                 # 报告 + 判定
-python preflight.py --multimodal    # 调用方模型能读图
-python preflight.py --json          # 机器可读
+"$PY" preflight.py                 # 报告 + 判定
+"$PY" preflight.py --multimodal    # 调用方模型能读图
+"$PY" preflight.py --json          # 机器可读
 ```
 
 检测 PyMuPDF / lxml / Pillow+NumPy / Acrobat 或 Word（查注册表，不启动应用）/ PaddleOCR（只查可导入，不真 import，省掉几秒和一堆警告）/ pandoc / Chrome-Edge，并打印**当前解释器路径**。
@@ -348,10 +378,10 @@ python preflight.py --json          # 机器可读
 ### `pdf_to_docx.py` — PDF 转 Word（2.0，首选路径）
 
 ```bash
-python pdf_to_docx.py <pdf> [-o out.docx] [--engine auto|acrobat|word]
-                            [--layout flowing|page]
-python pdf_to_docx.py --check                 # 看本机准备好了没
-python pdf_to_docx.py --install-acrobat-js    # 一次性安装 Acrobat 受信任脚本
+"$PY" pdf_to_docx.py <pdf> [-o out.docx] [--engine auto|acrobat|word]
+                           [--layout flowing|page]
+"$PY" pdf_to_docx.py --check                 # 看本机准备好了没
+"$PY" pdf_to_docx.py --install-acrobat-js    # 一次性安装 Acrobat 受信任脚本
 ```
 
 `--engine auto` 先试 Acrobat（全自动，首次弹一次 UAC），失败自动退 Word。`--layout` 默认 `flowing`，见上方「首选路径」一节——`page` 会打乱句子顺序，只在需要视觉保真时用。Windows only（依赖 COM）。
@@ -365,7 +395,7 @@ python pdf_to_docx.py --install-acrobat-js    # 一次性安装 Acrobat 受信�
 ### `docx_extract.py` — 从 Word 抽正文 + 图 + 图的位置（2.1）
 
 ```bash
-python docx_extract.py <docx> [-o OUTDIR]
+"$PY" docx_extract.py <docx> [-o OUTDIR]
 ```
 
 产出 `content.md`（正文按顺序，图的位置用 `[[FIG 2 -> media/fig02.jpg]]` 标出）、`content.json`、`media/`（图片按图号命名）、`manifest.json`。
@@ -389,9 +419,9 @@ python docx_extract.py <docx> [-o OUTDIR]
 ### `panel_split.py` — 把整张图切成 a/b/c 单个面板（4.0）
 
 ```bash
-python panel_split.py <figure.png> -o panels/ --layout 4,3,4,3,1 [--expect a-o]
-python panel_split.py <figure.png> -o panels/ --grid 2x2      # 强制均匀网格
-python panel_split.py <figure.png> -o panels/ --no-ocr        # 只用几何校验
+"$PY" panel_split.py <figure.png> -o panels/ --layout 4,3,4,3,1 [--expect a-o]
+"$PY" panel_split.py <figure.png> -o panels/ --grid 2x2      # 强制均匀网格
+"$PY" panel_split.py <figure.png> -o panels/ --no-ocr        # 只用几何校验
 ```
 
 **`--layout` 是每行几个面板，必须自己看图数出来。** 不给也能跑（自动模式），但经常数错——数错时脚本 exit 3 明说，不会假装成功。面板行间距可以只有 4 px，而面板*内部*（图和刻度标签之间）的空白能有 30 px，纯靠像素分不出哪条是边界。
@@ -414,7 +444,7 @@ OCR 读不出 `i`、`l`、`o` 是常态（细笔画），脚本会在 note 里�
 ### `insert_figures.py` — 把图移到正文第一次提到它的位置（5.2）
 
 ```bash
-python insert_figures.py <译文.md> [--dry-run] [-o out.md]
+"$PY" insert_figures.py <译文.md> [--dry-run] [-o out.md]
 ```
 
 图全堆在文末的 `## 图` 里，读者在第 4 页读到「如图 2 所示」要翻到第 12 页再翻回来。脚本把图块整块抬出来，插到第一次提到该图号的正文段落之后，并核对前后图片数量，不一致就拒绝写入。原文件留 `.bak`。
@@ -426,7 +456,7 @@ python insert_figures.py <译文.md> [--dry-run] [-o out.md]
 ### `extract_paper.py` — 提取文本 + 图（3.0，回退路径）
 
 ```bash
-python extract_paper.py <pdf> [-o OUTDIR] [--dpi 200] [--max-width 1600] [--pages 21-24] [--ocr] [--ocr-lang en] [--split-panels]
+"$PY" extract_paper.py <pdf> [-o OUTDIR] [--dpi 200] [--max-width 1600] [--pages 21-24] [--ocr] [--ocr-lang en] [--split-panels]
 ```
 
 产出 `text.txt`、`figures/pNN.png`、`manifest.json`。
@@ -477,8 +507,8 @@ OK: figure count consistent with text references.
 ### `add_toc.py` — 给译文加「目录」块（5.3）
 
 ```bash
-python add_toc.py <译文.md> [--depth 3] [--include-figures] [--dry-run] [-o out.md]
-python add_toc.py <译文.md> --remove
+"$PY" add_toc.py <译文.md> [--depth 3] [--include-figures] [--dry-run] [-o out.md]
+"$PY" add_toc.py <译文.md> --remove
 ```
 
 一篇 24 页的译文在纯文本编辑器里打开是没有导航的。脚本在第一个 `##` 章节之前插入一个用 HTML 注释界定的块：
@@ -505,7 +535,7 @@ python add_toc.py <译文.md> --remove
 ### `md_to_pdf.py` — Markdown 转 PDF（6.0）
 
 ```bash
-python md_to_pdf.py <input.md> [-o out.pdf] [--font serif|sans] [--keep-html]
+"$PY" md_to_pdf.py <input.md> [-o out.pdf] [--font serif|sans] [--keep-html]
                     [--no-toc] [--toc-depth 3]
 ```
 

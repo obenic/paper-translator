@@ -34,6 +34,22 @@ ls "$SK"/*.py >/dev/null 2>&1 || echo "SK 不对：该目录没有脚本"
 
 那一行检查不能跳。有些安装方式下 `~/.claude/skills/<name>/` 里**只有 `SKILL.md`**，是一个指向别处的注册桩；此时把 `$SK` 换成桩正文里写明的真实路径（例如本体放在别的盘）。PowerShell 用 `$env:USERPROFILE` 代替 `~`。
 
+**再把 `$PY` 指对，否则依赖装了也会报一串 MISSING。** `$PY` 是**装了本 skill 依赖的那个解释器**，未必是裸 `python`：
+
+```bash
+PY=python                                  # 多数情况够用
+echo "${VIRTUAL_ENV:-<none>}"              # 有值 = 当前在 venv 里，裸 python 就是 venv 那个
+```
+
+`$VIRTUAL_ENV` 有值时**先别信裸 `python`**：venv 默认 `include-system-site-packages = false`，全局装的包它一个都看不到。这种机器上 1.0 会把三个能力一起报成 MISSING 并 exit 4——**跟「没装」是两码事，别照 exit 4 的指引让用户重装一遍**。列出候选解释器换一个：
+
+```bash
+py -0p                          # Windows：列出所有注册的解释器，带 * 的是当前
+which -a python python3         # macOS / Linux
+```
+
+**判据只有一个：拿它跑 1.0，报告干净就是它。** 别用「import 某个包成功」代替——venv 里往往恰好有 PyMuPDF 而缺 lxml/pywin32/paddleocr，单包探针会给你一个假的通过。定下来之后每条命令都用同一个，报告开头的 interpreter 行就是给你核对这件事的。
+
 步骤编号一览，照这个顺序走：
 
 | 步 | 干什么 | 谁干 |
@@ -56,8 +72,8 @@ ls "$SK"/*.py >/dev/null 2>&1 || echo "SK 不对：该目录没有脚本"
 **这是第一条命令，比转 Word 更早。** 你的机器不等于别人的机器——Acrobat Pro、PaddleOCR、多模态识图是三件互不相干的事，而这三个里**必须至少有一个**。
 
 ```bash
-python "$SK/preflight.py"                 # 当前模型不能识图时这样跑
-python "$SK/preflight.py" --multimodal    # 你自己能读图就加这个
+"$PY" "$SK/preflight.py"                 # 当前模型不能识图时这样跑
+"$PY" "$SK/preflight.py" --multimodal    # 你自己能读图就加这个
 ```
 
 **`--multimodal` 只能由你自己判断——脚本探测不到模型能力。** 你确实能读图（Read 工具吃 PNG）就加上；不确定就别加。虚报会让流程在最需要人眼的那一步失去唯一的兜底。
@@ -75,20 +91,22 @@ python "$SK/preflight.py" --multimodal    # 你自己能读图就加这个
 | 码 | 含义 | 怎么办 |
 |---|---|---|
 | `0` | 至少一个能力可用 | 读 verdict 段落，它逐条写明本机降档在哪，照着调整后续步骤 |
-| `1` | 连 PyMuPDF 都没有 | `pip install pymupdf` |
-| `4` | **三个能力全无** | 见下，不许绕 |
+| `1` | 连 PyMuPDF 都没有 | `"$PY" -m pip install pymupdf` |
+| `4` | **三个能力全无** | 先按下面那条排除解释器；确实全无才往下走，不许绕 |
 
-**exit 4 的唯一正确处理：让用户装 PaddleOCR。**
+**exit 4 先排除一件事：`$PY` 是不是指向了一个空的 venv。** 依赖装在全局、命令跑在 venv 里，三个能力会被一起报成 MISSING——此时让用户再装一遍 1GB 是白装。`echo "$VIRTUAL_ENV"` 有值就换解释器重跑一次（见「流程」开头 `$PY` 那段），别拿 venv 的报告当结论。
+
+**确实三个能力全无时，唯一正确处理是让用户装 PaddleOCR。**
 
 ```bash
-pip install paddlepaddle paddleocr        # 约 1GB，一条命令
+"$PY" -m pip install paddlepaddle paddleocr        # 约 1GB；-m pip 保证装进 $PY 而不是别的解释器
 ```
 
 三者里 OCR 代价最小。为翻一篇论文现装 Acrobat Pro 不现实（体积、授权、时间都不划算），换多模态模型也不是人人说换就能换。
 
 **用户不装就停在这里。** 明确告诉他：这台机器上没有任何东西能验证图的活干对了没有，扫描件更是完全没戏，本 skill 不在这种状态下产出译文。**没有跳过参数，也不要自己发明绕法**——不要「先翻正文回头再说图」，不要偷偷退回整张图硬交付。半可信的译文比没有译文更糟：读者看不出错在哪。
 
-**报告开头那行解释器路径要看一眼。** venv 会遮住全局安装——包装在全局、命令跑在 venv 里，检测结果就是一串 MISSING，而这跟「没装」是两码事。后续每条 `python` 命令都要用报告里那个解释器。
+**报告开头那行 interpreter 必须和你定的 `$PY` 是同一个。** 对不上，就是拿一个解释器查依赖、拿另一个跑脚本——一串 MISSING 多半出在这里，而不是真没装（见「流程」开头 `$PY` 那段）。
 
 ### 2.0 首选路径：先把 PDF 转成 Word
 
@@ -101,8 +119,8 @@ pip install paddlepaddle paddleocr        # 约 1GB，一条命令
 **已经有 `.docx` 原件时**（用户直接给 Word 版论文，或自己导出过），跳过本步，直接从 2.1 开始——`docx_extract.py` 吃任意 `.docx`。
 
 ```bash
-python "$SK/pdf_to_docx.py" "<pdf>"          # auto：先 Acrobat，失败退 Word
-python "$SK/pdf_to_docx.py" --check          # 看本机准备好了没
+"$PY" "$SK/pdf_to_docx.py" "<pdf>"          # auto：先 Acrobat，失败退 Word
+"$PY" "$SK/pdf_to_docx.py" --check          # 看本机准备好了没
 ```
 
 **Acrobat Pro 导出现在是全自动的，不需要让用户手动点菜单。** 唯一的人工动作是**首次运行时批准一次 UAC 弹窗**（要把受信任脚本写进 Acrobat 安装目录），批准后永久生效，之后每次导出零交互。脚本自己判断装没装，已装就不再弹。
@@ -133,7 +151,7 @@ python "$SK/pdf_to_docx.py" --check          # 看本机准备好了没
 ### 2.1 从 Word 抽正文 + 图 + 图的位置
 
 ```bash
-python "$SK/docx_extract.py" "<docx>"
+"$PY" "$SK/docx_extract.py" "<docx>"
 ```
 
 产出 `content.md`（正文按顺序，图的位置用 `[[FIG 2 -> media/fig02.jpg]]` 标出）、`content.json`、`media/`（图片，按图号命名）、`manifest.json`。
@@ -178,7 +196,7 @@ python "$SK/docx_extract.py" "<docx>"
 脚本位置见「流程」开头的 `$SK`。
 
 ```bash
-python "$SK/extract_paper.py" "<pdf>" -o "<tmp_dir>"
+"$PY" "$SK/extract_paper.py" "<pdf>" -o "<tmp_dir>"
 ```
 
 **扫描件处理：**
@@ -191,7 +209,7 @@ python "$SK/extract_paper.py" "<pdf>" -o "<tmp_dir>"
 | **视觉识图** | 不加参数 | 当前模型能识图 |
 
 ```bash
-python "$SK/extract_paper.py" "<pdf>" -o "<tmp_dir>" --ocr
+"$PY" "$SK/extract_paper.py" "<pdf>" -o "<tmp_dir>" --ocr
 # 中英混排原件加 --ocr-lang ch；识别率低加 --dpi 300
 ```
 
@@ -202,7 +220,7 @@ python "$SK/extract_paper.py" "<pdf>" -o "<tmp_dir>" --ocr
 **先看退出码：**
 - `0` — 图数量一致，继续
 - `3` — **图可能漏了**。查 `manifest.json` 的 `per_page` 定位缺失页，用 `--pages 5,12-14` 强制渲染，直到一致
-- `1` — 报错（缺 PyMuPDF → `pip install pymupdf`；缺 PaddleOCR → `pip install paddlepaddle paddleocr`）
+- `1` — 报错（缺 PyMuPDF → `"$PY" -m pip install pymupdf`；缺 PaddleOCR → `"$PY" -m pip install paddlepaddle paddleocr`）
 
 摘要里 `SCANNED` 表示全篇无文本层。此时：
 
@@ -218,8 +236,8 @@ python "$SK/extract_paper.py" "<pdf>" -o "<tmp_dir>" --ocr
 一张图常常是十几个子图挤在一起。图注写的是「**a** 温度分布……**b** 皮尔逊热图……」，读者却只有一整块图可看，得自己数格子。所以**按 a/b/c 切开，每个面板配自己那句图注**。
 
 ```bash
-python "$SK/panel_split.py" "<tmp_dir>/figures/p22.png" -o "<tmp_dir>/panels" --layout 4,3,4,3,1 --expect a-o
-python "$SK/panel_split.py" "<out>/media/fig02.jpg"     -o "<out>/panels"  --layout 4,3,4,3,1 --expect a-o   # Word 路径
+"$PY" "$SK/panel_split.py" "<tmp_dir>/figures/p22.png" -o "<tmp_dir>/panels" --layout 4,3,4,3,1 --expect a-o
+"$PY" "$SK/panel_split.py" "<out>/media/fig02.jpg"     -o "<out>/panels"  --layout 4,3,4,3,1 --expect a-o   # Word 路径
 ```
 
 **`--layout` 是每行几个面板，必须自己看图数出来。** 这一步不能省：面板之间的行间距可以只有 4 px，而面板*内部*（图和刻度标签之间）的空白能有 30 px，纯靠像素分不出哪条是边界。你看一眼就知道的事，算法猜不到。
@@ -299,7 +317,7 @@ pandoc 的 `implicit_figures` 会把它变成 `<figure>` + `<figcaption>` 原子
 图全堆在文末的 `## 图` 里，读者在第 4 页读到「如图 2 所示」，要翻到第 12 页再翻回来。**图必须紧跟在第一次提到它的那段正文后面。**
 
 ```bash
-python "$SK/insert_figures.py" "<译文.md>"
+"$PY" "$SK/insert_figures.py" "<译文.md>"
 ```
 
 脚本把已有的图块（图片行 + 它上面的 `### 图 N` 小标题）整块抬出来，再插到**第一次提到该图号的正文段落之后**；文末空掉的 `## 图` 小节自动删除。原文件留 `.bak`。
@@ -317,7 +335,7 @@ python "$SK/insert_figures.py" "<译文.md>"
 一篇 24 页的译文，在纯文本编辑器里打开是没有任何导航的。给 Markdown 加一个「目录」小节：
 
 ```bash
-python "$SK/add_toc.py" "<译文.md>"
+"$PY" "$SK/add_toc.py" "<译文.md>"
 ```
 
 产出一个用 HTML 注释界定的块，可反复刷新而不会叠加：
@@ -341,7 +359,7 @@ python "$SK/add_toc.py" "<译文.md>"
 ### 6.0 转 PDF
 
 ```bash
-python "$SK/md_to_pdf.py" "<译文.md>"
+"$PY" "$SK/md_to_pdf.py" "<译文.md>"
 ```
 
 pandoc → 自包含 HTML（图片转 data URI）→ Chrome/Edge 无头打印。不需要 LaTeX。
@@ -399,7 +417,7 @@ pandoc → 自包含 HTML（图片转 data URI）→ Chrome/Edge 无头打印。
 校验图注是否错位：
 
 ```bash
-python -c "import fitz,re; d=fitz.open(r'<pdf>'); [print(i+1, re.findall(r'图\s*\d+\s*\|', p.get_text())) for i,p in enumerate(d) if p.get_images()]"
+"$PY" -c "import fitz,re; d=fitz.open(r'<pdf>'); [print(i+1, re.findall(r'图\s*\d+\s*\|', p.get_text())) for i,p in enumerate(d) if p.get_images()]"
 ```
 
 每个有图的页面应当只出现**一个**图号。
@@ -408,9 +426,9 @@ python -c "import fitz,re; d=fitz.open(r'<pdf>'); [print(i+1, re.findall(r'图\s
 
 | 问题 | 解决 |
 |------|------|
-| `preflight.py` 报 exit 4 | 三个能力全无。让用户 `pip install paddlepaddle paddleocr`（三者里代价最小）；不装就停止，不要绕、不要只翻正文 |
-| `preflight.py` 说某个包 MISSING，但明明装过 | 跑的解释器不是装包那个。看报告开头的 interpreter 行——venv 会遮住全局安装 |
-| 转换器显示 ok，verdict 里却判 UNUSABLE | 缺 lxml。`docx_extract.py` 靠它解析 .docx，`pip install lxml` 即解 |
+| `preflight.py` 报 exit 4 | **先确认 `$PY` 不是空 venv**（`echo "$VIRTUAL_ENV"`，见下一条）。确实三个能力全无才让用户 `"$PY" -m pip install paddlepaddle paddleocr`（三者里代价最小）；不装就停止，不要绕、不要只翻正文 |
+| `preflight.py` 说某个包 MISSING，但明明装过 | 跑的解释器不是装包那个。看报告开头的 interpreter 行，按「流程」开头那段重新定 `$PY`——有已激活的 venv 时裸 `python` 一定是 venv 那个，而 venv 默认看不见全局包 |
+| 转换器显示 ok，verdict 里却判 UNUSABLE | 缺 lxml。`docx_extract.py` 靠它解析 .docx，`"$PY" -m pip install lxml` 即解 |
 | Acrobat 导出挂住不返回 | Protected Mode 又被打开了（Acrobat 更新会重置它）。`--check` 看它的值。若 `HKLM\...\FeatureLockDown` 有组策略锁定，脚本关不掉，只能改用 `--engine word` |
 | 报「folder script not loaded」 | 装脚本时 Acrobat 没完全退出。全部关掉再跑 `--install-acrobat-js` |
 | UAC 被拒绝，或用户不在场 | `--engine word` 兜底；或让用户手动导出（Settings → Layout Settings → Retain Flowing Text） |
