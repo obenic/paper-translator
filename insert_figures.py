@@ -31,6 +31,7 @@ Usage:
 Exit codes:
     0  every figure placed at a real mention
     3  some figure had no mention in the text - left at the end, GO LOOK
+       also: image lines exist but NONE could be parsed, so nothing moved
     1  error
 """
 
@@ -185,6 +186,28 @@ def relocate(text):
     return "\n\n".join(c.strip("\n") for c in out if c.strip()) + "\n", report
 
 
+def unparsed_image_lines(text):
+    """Image chunks that figure_number() cannot pin to a figure number.
+
+    relocate() ignores these silently - they never enter `blocks`, so they are
+    never moved and never appear in the report. When EVERY image line is
+    unparsed the report comes back empty and the old code printed
+    "OK: every figure sits after the paragraph that first mentions it"
+    while nothing had moved at all. Same class of silent pass that
+    docx_extract.py guards against with its "no caption at all" check.
+
+    The usual cause is a ')' inside the path: IMAGE_RE's path group is
+    [^)]*, so a filename like "paper (2024) 中文翻译_figs/fig01.png" ends the
+    match early and the trailing \\s*$ then fails.
+    """
+    out = []
+    for chunk in split_chunks(text):
+        s = chunk.strip()
+        if s.startswith("![") and figure_number(chunk) is None:
+            out.append(" ".join(s.split())[:70])
+    return out
+
+
 def main():
     ap = argparse.ArgumentParser(add_help=True)
     ap.add_argument("markdown")
@@ -215,7 +238,27 @@ def main():
               file=sys.stderr)
         return 1
 
+    stranded = unparsed_image_lines(text)
+    if stranded and not report:
+        print(f"images      : {before} found, 0 recognised")
+        print(f"\nERROR: {len(stranded)} image line(s) are present but none could be "
+              "matched, so\nnothing was moved. Reporting success here would hide a "
+              "figure-less delivery.",
+              file=sys.stderr)
+        if any(")" in s for s in stranded):
+            print("\nA ')' appears in these lines. The image pattern's path group is "
+                  "[^)]*, so it\nstops at the first ')' and the line stops matching - "
+                  "rename the markdown and its\n_figs folder so the name has no "
+                  "parentheses.", file=sys.stderr)
+        print("\nfirst unmatched line:\n  " + stranded[0], file=sys.stderr)
+        return 3
+
     print(f"images      : {before} (unchanged)")
+    if stranded:
+        print(f"WARNING     : {len(stranded)} image line(s) carry no figure number "
+              "and were left in place:")
+        for s in stranded[:5]:
+            print(f"  ? {s}")
     for r in sorted(report, key=lambda r: r["figure"]):
         if r["placed"]:
             print(f"  图 {r['figure']:<2} -> after: {r['after']}")

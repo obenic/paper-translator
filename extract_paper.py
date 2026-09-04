@@ -22,8 +22,10 @@ Figure detection covers three cases the text layer misses:
                                  drawing operations instead)
 
 Scanned PDFs (no text layer):
-    --ocr           Use PaddleOCR to extract text from rendered pages.
-                    Requires: pip install paddlepaddle paddleocr
+    --ocr           OCR rendered pages. Backend picked by ocr_engine.py:
+                    RapidOCR first, PaddleOCR as fallback.
+                    Requires: pip install --no-deps rapidocr
+                              pip install onnxruntime shapely pyclipper omegaconf colorlog
                     Without this flag, scanned PDFs produce empty text.txt
                     and you must rely on multimodal model vision.
 
@@ -112,60 +114,49 @@ def parse_pages(spec, n_pages):
 
 
 def make_ocr_engine(lang):
-    """Build a PaddleOCR engine, or exit with an actionable message.
+    """Build an OCR engine, or return (None, None) with an actionable message.
 
-    Targets the PaddleOCR 3.x API (3.7.0 / paddlepaddle 3.3.1 tested). The
-    2.x keywords (use_angle_cls, show_log) no longer exist.
+    Backend choice lives in ocr_engine.py: RapidOCR first, PaddleOCR as
+    fallback. Both run the same PP-OCR weights, so this is not an accuracy
+    trade - RapidOCR is just far cheaper to start and to run (measured 7.9x
+    faster on identical weights, 18.7x on its lighter default).
 
-    enable_mkldnn=False is required, not cosmetic: the oneDNN backend in
-    some paddlepaddle builds dies with
-      NotImplementedError: ConvertPirAttribute2RuntimeAttribute not support
-    before a single page is read. Turning it off costs a little speed and
-    makes OCR actually run.
+    Returns (engine, backend_name) so the summary can report which one ran.
     """
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
     try:
-        from paddleocr import PaddleOCR
+        import ocr_engine
     except ImportError:
-        print("ERROR: PaddleOCR missing. Run:\n"
-              "    pip install paddlepaddle paddleocr", file=sys.stderr)
-        return None
+        print("ERROR: ocr_engine.py must sit next to this script.",
+              file=sys.stderr)
+        return None, None
 
-    try:
-        return PaddleOCR(
-            use_doc_orientation_classify=False,
-            use_doc_unwarping=False,
-            use_textline_orientation=False,
-            lang=lang,
-            enable_mkldnn=False,
-        )
-    except TypeError as e:
-        print(f"ERROR: PaddleOCR rejected these options ({e}).\n"
-              "This script targets PaddleOCR 3.x. Upgrade with:\n"
-              "    pip install -U paddleocr paddlepaddle", file=sys.stderr)
-        return None
-    except Exception as e:
-        print(f"ERROR: could not start PaddleOCR: {e}", file=sys.stderr)
-        return None
+    engine, backend, note = ocr_engine.make_engine(lang=lang)
+    if engine is None:
+        print(f"ERROR: {note}", file=sys.stderr)
+        return None, None
+    if note:
+        print(f"NOTE: {note}")
+    return engine, backend
 
 
 def ocr_pixmap(engine, pix):
     """OCR one rendered page. Returns recognized text, one line per box."""
     import numpy as np
 
+    import ocr_engine
+
     img = np.frombuffer(pix.samples, dtype=np.uint8).reshape(
         pix.height, pix.width, pix.n)
     if pix.n == 4:          # RGBA -> RGB
         img = img[:, :, :3]
-    img = img[:, :, ::-1]   # RGB -> BGR, the OpenCV order PaddleOCR expects
 
     try:
-        res = engine.predict(img)
+        rows = ocr_engine.read(engine, img)     # adapter takes RGB
     except Exception as e:
         print(f"    OCR failed on this page: {e}", file=sys.stderr)
         return ""
-    if not res:
-        return ""
-    return "\n".join(res[0].get("rec_texts", []))
+    return "\n".join(r["text"] for r in rows)
 
 
 def analyze(page):
@@ -439,10 +430,10 @@ def main():
                     help="cap rendered width in px, keeps files embeddable")
     ap.add_argument("--pages", help="render these pages regardless (e.g. 21-24)")
     ap.add_argument("--ocr", action="store_true",
-                    help="OCR scanned pages with PaddleOCR "
-                         "(pip install paddlepaddle paddleocr)")
+                    help="OCR scanned pages (RapidOCR preferred, "
+                         "PaddleOCR fallback - see ocr_engine.py)")
     ap.add_argument("--ocr-lang", default="en",
-                    help="PaddleOCR language: en, ch, japan, korean, ... "
+                    help="OCR language: en, ch, japan, korean, ... "
                          "(default: en; use ch for Chinese-English mixed)")
     ap.add_argument("--split-panels", action="store_true",
                     help="also cut each rendered figure into its panels "
@@ -476,16 +467,18 @@ def main():
     # OCR pass. Only meaningful for a PDF with no text layer - a text PDF
     # already has better text than OCR would produce.
     ocr_used = False
+    ocr_backend = None
     if args.ocr:
         if not scanned:
             print(f"NOTE: --ocr ignored, this PDF already has a text layer "
                   f"({text_pages} text pages).")
         else:
-            engine = make_ocr_engine(args.ocr_lang)
+            engine, ocr_backend = make_ocr_engine(args.ocr_lang)
             if engine is None:
                 return 1
             print(f"OCR: scanned PDF, reading {len(pages)} pages "
-                  f"(lang={args.ocr_lang}; first run downloads models)...")
+                  f"({ocr_backend}, lang={args.ocr_lang}; "
+                  f"first run downloads models)...")
             for i, page in enumerate(doc):
                 zoom = args.dpi / 72.0
                 pix = page.get_pixmap(matrix=fitz.Matrix(zoom, zoom))
@@ -609,6 +602,7 @@ def main():
         "text_pages": text_pages,
         "is_scanned": scanned,
         "ocr_used": ocr_used,
+        "ocr_backend": ocr_backend,
         "ocr_lang": args.ocr_lang if ocr_used else None,
         "figures_referenced_in_text": sorted(counted),
         "figures_expected": expected,
@@ -628,7 +622,7 @@ def main():
     if scanned:
         print("SCANNED     : no text layer - use --ocr, or read figures/*.png visually")
     if ocr_used:
-        print(f"OCR         : PaddleOCR (lang={args.ocr_lang})")
+        print(f"OCR         : {ocr_backend} (lang={args.ocr_lang})")
     print(f"text        : {text_path}")
     print(f"figures     : {len(rendered)} rendered -> {fig_dir}")
     for r in rendered:

@@ -9,7 +9,7 @@
         <mxCell id="60" value="paper-translator ｜ 论文翻译全流程" style="text;html=1;align=left;verticalAlign=middle;fontSize=22;fontStyle=1;fontFamily=Microsoft YaHei;fontColor=#333333;" vertex="1" parent="1">
           <mxGeometry x="40" y="40" width="360" height="40" as="geometry" />
         </mxCell>
-        <mxCell id="61" value="8 个脚本 · 2 条路径 · 1 道能力门 · 1 个决策门 · 4 处 exit 3" style="text;html=1;align=left;verticalAlign=middle;fontSize=13;fontFamily=Microsoft YaHei;fontColor=#666666;" vertex="1" parent="1">
+        <mxCell id="61" value="9 个脚本 · 2 条路径 · 1 道能力门 · 1 个决策门 · 4 处 exit 3" style="text;html=1;align=left;verticalAlign=middle;fontSize=13;fontFamily=Microsoft YaHei;fontColor=#666666;" vertex="1" parent="1">
           <mxGeometry x="40" y="84" width="375" height="26" as="geometry" />
         </mxCell>
 
@@ -17,12 +17,12 @@
           <mxGeometry x="420" y="1640" width="380" height="110" as="geometry" />
         </mxCell>
 
-        <mxCell id="24" value="&lt;b style=&quot;font-size:15px&quot;&gt;1.0 preflight.py&lt;/b&gt;　&lt;font style=&quot;font-size:11px&quot;&gt;第一条命令&lt;/font&gt;&lt;br&gt;&lt;font style=&quot;font-size:12px&quot;&gt;这台机器干不干得了这活？&lt;br&gt;&lt;b&gt;三大能力至少要有一个：&lt;/b&gt;&lt;br&gt;转换器 ・ PaddleOCR ・ 多模态&lt;br&gt;--multimodal 由调用方自己声明&lt;br&gt;报告首行的解释器路径要核对&lt;/font&gt;" style="rounded=1;arcSize=8;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;strokeWidth=3;fontFamily=Microsoft YaHei;fontSize=13;" vertex="1" parent="1">
+        <mxCell id="24" value="&lt;b style=&quot;font-size:15px&quot;&gt;1.0 preflight.py&lt;/b&gt;　&lt;font style=&quot;font-size:11px&quot;&gt;第一条命令&lt;/font&gt;&lt;br&gt;&lt;font style=&quot;font-size:12px&quot;&gt;这台机器干不干得了这活？&lt;br&gt;&lt;b&gt;三大能力至少要有一个：&lt;/b&gt;&lt;br&gt;转换器 ・ RapidOCR ・ 多模态&lt;br&gt;--multimodal 由调用方自己声明&lt;br&gt;报告首行的解释器路径要核对&lt;/font&gt;" style="rounded=1;arcSize=8;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;strokeWidth=3;fontFamily=Microsoft YaHei;fontSize=13;" vertex="1" parent="1">
           <mxGeometry x="40" y="190" width="300" height="150" as="geometry" />
         </mxCell>
 
-        <mxCell id="25" value="&lt;b style=&quot;font-size:14px&quot;&gt;exit 4｜三者全无 → 停止&lt;/b&gt;&lt;br&gt;&lt;font style=&quot;font-size:12px&quot;&gt;让用户装 OCR，三者里代价最小：&lt;br&gt;&lt;b&gt;pip install paddlepaddle paddleocr&lt;/b&gt;&lt;br&gt;（约 1GB，一条命令）&lt;br&gt;不装就到此为止 —— 没有跳过参数&lt;/font&gt;" style="rounded=1;arcSize=8;whiteSpace=wrap;html=1;fillColor=#f8cecc;strokeColor=#b85450;fontFamily=Microsoft YaHei;fontSize=13;" vertex="1" parent="1">
-          <mxGeometry x="40" y="390" width="300" height="140" as="geometry" />
+        <mxCell id="25" value="&lt;b style=&quot;font-size:14px&quot;&gt;exit 4｜三者全无 → 停止&lt;/b&gt;&lt;br&gt;&lt;font style=&quot;font-size:12px&quot;&gt;让用户装 OCR，三者里代价最小：&lt;br&gt;&lt;b&gt;pip install --no-deps rapidocr&lt;/b&gt;&lt;br&gt;&lt;b&gt;pip install onnxruntime shapely pyclipper omegaconf colorlog&lt;/b&gt;&lt;br&gt;（约 40MB；--no-deps 不能省，它会抢 cv2）&lt;br&gt;不装就到此为止 —— 没有跳过参数&lt;/font&gt;" style="rounded=1;arcSize=8;whiteSpace=wrap;html=1;fillColor=#f8cecc;strokeColor=#b85450;fontFamily=Microsoft YaHei;fontSize=13;" vertex="1" parent="1">
+          <mxGeometry x="40" y="390" width="300" height="168" as="geometry" />
         </mxCell>
 
         <mxCell id="2" value="&lt;b style=&quot;font-size:16px&quot;&gt;用户：「翻译这篇文献」&lt;/b&gt;&lt;br&gt;&lt;font style=&quot;font-size:12px&quot;&gt;输入：论文 PDF，或已有 .docx&lt;br&gt;触发：description 匹配&lt;/font&gt;" style="ellipse;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;fontFamily=Microsoft YaHei;fontSize=13;" vertex="1" parent="1">
@@ -41,7 +41,7 @@
           <mxGeometry x="420" y="520" width="380" height="150" as="geometry" />
         </mxCell>
 
-        <mxCell id="6" value="&lt;b style=&quot;font-size:15px&quot;&gt;4.0 panel_split.py&lt;/b&gt;　&lt;font style=&quot;font-size:11px&quot;&gt;两条路都要做&lt;/font&gt;&lt;br&gt;&lt;font style=&quot;font-size:12px&quot;&gt;按 a／b／c 切面板，每个面板配自己那句图注&lt;br&gt;--layout 是每行几个面板，必须看图数出来&lt;br&gt;OCR 四重校验 ＋ --expect 第五重（图注数）&lt;/font&gt;" style="rounded=1;arcSize=8;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontFamily=Microsoft YaHei;fontSize=13;" vertex="1" parent="1">
+        <mxCell id="6" value="&lt;b style=&quot;font-size:15px&quot;&gt;4.0 panel_split.py&lt;/b&gt;　&lt;font style=&quot;font-size:11px&quot;&gt;两条路都要做&lt;/font&gt;&lt;br&gt;&lt;font style=&quot;font-size:12px&quot;&gt;按 a／b／c 切面板，每个面板配自己那句图注&lt;br&gt;--layout 是每行几个面板，必须看图数出来&lt;br&gt;RapidOCR 四重校验 ＋ --expect 第五重（图注数）&lt;/font&gt;" style="rounded=1;arcSize=8;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontFamily=Microsoft YaHei;fontSize=13;" vertex="1" parent="1">
           <mxGeometry x="420" y="1130" width="380" height="110" as="geometry" />
         </mxCell>
 
@@ -93,7 +93,7 @@
           <mxGeometry x="880" y="1130" width="280" height="110" as="geometry" />
         </mxCell>
 
-        <mxCell id="33" value="&lt;b&gt;exit 3｜有图找不到提及&lt;/b&gt;&lt;br&gt;&lt;font style=&quot;font-size:12px&quot;&gt;是漏译了引用句，&lt;br&gt;还是原文写的「见下图」？&lt;br&gt;补上引用再跑，别直接交付。&lt;/font&gt;" style="rounded=1;arcSize=8;whiteSpace=wrap;html=1;fillColor=#f8cecc;strokeColor=#b85450;fontFamily=Microsoft YaHei;fontSize=13;" vertex="1" parent="1">
+        <mxCell id="33" value="&lt;b&gt;exit 3｜图没能归位&lt;/b&gt;&lt;br&gt;&lt;font style=&quot;font-size:12px&quot;&gt;找不到提及：是漏译了引用句，&lt;br&gt;还是原文写的「见下图」？&lt;br&gt;一张都没识别出来：文件名带了圆括号。&lt;br&gt;查清再跑，别直接交付。&lt;/font&gt;" style="rounded=1;arcSize=8;whiteSpace=wrap;html=1;fillColor=#f8cecc;strokeColor=#b85450;fontFamily=Microsoft YaHei;fontSize=13;" vertex="1" parent="1">
           <mxGeometry x="880" y="1470" width="280" height="110" as="geometry" />
         </mxCell>
 
@@ -109,7 +109,7 @@
         <mxCell id="43" value="" style="rounded=0;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;" vertex="1" parent="40">
           <mxGeometry x="12" y="54" width="30" height="16" as="geometry" />
         </mxCell>
-        <mxCell id="44" value="Python 脚本（本仓库 8 个）" style="text;html=1;align=left;verticalAlign=middle;fontFamily=Microsoft YaHei;fontSize=12;" vertex="1" parent="40">
+        <mxCell id="44" value="Python 脚本（本仓库 9 个）" style="text;html=1;align=left;verticalAlign=middle;fontFamily=Microsoft YaHei;fontSize=12;" vertex="1" parent="40">
           <mxGeometry x="52" y="52" width="230" height="20" as="geometry" />
         </mxCell>
         <mxCell id="45" value="" style="rounded=0;html=1;fillColor=#e1d5e7;strokeColor=#9673a6;" vertex="1" parent="40">

@@ -10,16 +10,32 @@ numpy>=1.24.0
 
 # 下面三样是「三选一」——至少要有一个，否则 preflight.py exit 4 直接停：
 #   1) pywin32 + Acrobat Pro / Word（仅 Windows）
-#   2) paddlepaddle + paddleocr
+#   2) OCR：rapidocr
 #   3) 多模态模型（不是 pip 装的，跑 preflight.py 时加 --multimodal 声明）
 #
 # PDF 转 Word（pdf_to_docx.py，仅 Windows，走 Acrobat / Word 的 COM 接口）
 # Acrobat Pro 全自动导出是默认第一步，装了它这条就该打开。
 # pywin32>=306
 
-# 扫描件 OCR + 面板标签校验。约 1GB。三选一里代价最小的一个。
+# 扫描件 OCR + 面板标签校验。装 RapidOCR：https://github.com/RapidAI/RapidOCR
+# 两个后端跑的是同一套 PP-OCR 权重
+# （RapidOCR 是把百度的模型转成 ONNX，版权仍归百度），所以这不是精度取舍，
+# 而是同一个模型的两种跑法。ocr_engine.py 优先 RapidOCR，没有才回退 PaddleOCR。
+#
+# 装它。约 40MB（onnxruntime 常常已被别的包带进来），
+# 实测同权重快 7.9 倍、用它更轻的默认档快 18.7 倍。
+# --no-deps 是必须的：它声明依赖 opencv_python，而多数环境装的是
+# opencv-contrib-python，两者争同一个 cv2 目录。contrib 版供的 cv2 完全够用
+# （实测换过去 6 页输出逐字一致）。
+#   pip install --no-deps rapidocr
+#   pip install onnxruntime shapely pyclipper omegaconf colorlog
+# 实测版本 rapidocr 3.9.2 + onnxruntime 1.26.0（Python 3.13）。
+# rapidocr>=3.9
+
+# PaddleOCR：ocr_engine.py 仍支持（已装就自动能用），但慢一个数量级、大一个数量级（约 1GB）、
+# 精度不占优，新装没有理由选它。
 # 实测版本 paddleocr 3.7.0 + paddlepaddle 3.3.1 (Python 3.13)。
 #   pip install paddlepaddle paddleocr
-# 脚本内部强制 enable_mkldnn=False，绕过部分 paddle 构建的 oneDNN 崩溃。
+# ocr_engine.py 内部强制 enable_mkldnn=False，绕过部分 paddle 构建的 oneDNN 崩溃。
 # paddlepaddle>=3.0
 # paddleocr>=3.0

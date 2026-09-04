@@ -10,9 +10,9 @@
 
 ![paper-translator 全流程](docs/pipeline.png)
 
-蓝色是本仓库的 8 个 Python 脚本，紫色是模型干的活，黄色菱形是分支——**★ 那个必须停下来问用户**，不许自己替他决定；红色是校验拦截，任何一处 `exit 3` 没查证就不许往下走。
+蓝色是本仓库的 9 个 Python 脚本（含被 3.0 和 4.0 共用的 OCR 适配层 `ocr_engine.py`，它不占流程步骤所以图上没有单独的框），紫色是模型干的活，黄色菱形是分支——**★ 那个必须停下来问用户**，不许自己替他决定；红色是校验拦截，任何一处 `exit 3` 没查证就不许往下走。
 
-**左上角那个 `1.0 preflight.py` 是第一条命令，也是一道硬门**：Acrobat/Word 转换器、PaddleOCR、多模态模型，三个里必须有一个，全无就 `exit 4` 停在那儿（细节见上方使用前提第 1 条）。
+**左上角那个 `1.0 preflight.py` 是第一条命令，也是一道硬门**：Acrobat/Word 转换器、OCR、多模态模型，三个里必须有一个，全无就 `exit 4` 停在那儿（细节见上方使用前提第 1 条）。
 
 主干只有一条：**1.0 环境自检 → 2.0 转 Word → 2.1 抽正文和图 → 2.2 问用户 → 4.0 切面板 → 5.0 翻译 → 5.1 写 Markdown → 5.2 图归位 → 5.3 加目录 → 6.0 转 PDF → 7.0 自检**。左边那条 `3.0 extract_paper.py` 是回退路径，只在两种情况下走：2.2 用户对 Word 的结果不满意，或这台机器根本没有可用的转换器。两条路在 `4.0 panel_split.py` 汇合——**切面板是两条路都要做的**，因为转换器给的是一张合成图，不是一个个子图。
 
@@ -33,6 +33,10 @@
 > - Acrobat 自动导出：两种 layout 模式各导一遍做结构对比；崩溃后恢复注册表的路径单独造场景验证
 >
 > 开发过程中还测出几个真实 bug 并修掉了：图注被转换器粘进正文时之后所有图编号整体错位一号；「一条图注都没抽到」曾被静默判为通过；Windows 下中文路径与编码引发的多处静默失败。**没测就不敢说能用**——这条底线还是守住了。
+>
+> 后来又拿两篇真论文（Small 2024 单栏、Adv. Funct. Mater. 2026 十九页双栏综述）跑全流程，当场又抓出两个同类的静默失败，都已修：
+> - **`insert_figures.py` 把「零张图」判成成功。** 译文文件名带圆括号（`Small (2024)`）时，`![...](路径)` 的路径匹配到路径里那个 `)` 就停，整行不再算图片行 → 收集到 0 个图块 → 报告为空 → 打印「每张图都归位了」，而六张图一张没动。现在这种情况 exit 3 并指出圆括号
+> - **宽横幅 logo 突破了尺寸判据。** 原先只按「远小于中位数」滤页面装饰，而 Wiley 那篇的 `ADVANCED SCIENCE NEWS` 横幅是 2933×676——全篇**最大**的一张图，于是抢走了图 1，后面每张图错位一号。现在加了形状判据：第一条图注之前、长宽比 ≥ 3 的判为装饰（阈值取自 18 张真图实测，最扁的一张是 2.33）
 
 ---
 
@@ -71,7 +75,7 @@
 > which -a python python3         # macOS / Linux
 > ```
 >
-> **判据只有一个：拿它跑 `preflight.py`，报告干净就是它。** 别拿「import 某个包成功」代替——venv 里往往恰好有 PyMuPDF 而缺 lxml/pywin32/paddleocr，单包探针会给你一个假的通过。定下来之后每条命令都用同一个，`preflight.py` 报告开头的 interpreter 行就是给你核对这件事的。
+> **判据只有一个：拿它跑 `preflight.py`，报告干净就是它。** 别拿「import 某个包成功」代替——venv 里往往恰好有 PyMuPDF 而缺 lxml/pywin32/rapidocr，单包探针会给你一个假的通过。定下来之后每条命令都用同一个，`preflight.py` 报告开头的 interpreter 行就是给你核对这件事的。
 >
 > **PowerShell 写法不一样**：`$PY = "python"`，调用时前面要加调用运算符 `&`（`& $PY preflight.py`）。`$PY` 存的是命令名，不加 `&` 只会把这行当字符串打印出来。
 
@@ -81,7 +85,7 @@
 >
 > ---
 >
-> ## 1. Acrobat、PaddleOCR、多模态模型——三个里必须有一个
+> ## 1. Acrobat、OCR、多模态模型——三个里必须有一个
 >
 > ---
 >
@@ -99,22 +103,25 @@
 > | 能力 | 有了它 | 没有它 |
 > |---|---|---|
 > | **PDF→Word 转换器**（Acrobat Pro 或 Word，Windows only） | 图按原位嵌进正文，位置不用猜 | 图的位置靠「首次提及」猜 |
-> | **PaddleOCR**（约 1GB） | 能读扫描件；能用读回的 a/b/c 标签校验面板切对没切错 | 面板切分只剩几何校验，切错了没人拦你 |
+> | **OCR**（[RapidOCR](https://github.com/RapidAI/RapidOCR)，约 40MB） | 能读扫描件；能用读回的 a/b/c 标签校验面板切对没切错 | 面板切分只剩几何校验，切错了没人拦你 |
 > | **多模态模型** | 直接看图确认切对了、图注没配错 | 图注错位只能靠一条 fitz 命令粗查 |
 >
 > **三个全无 → `preflight.py` 直接 exit 4，到此为止。** 这不是脚本小气：这种机器上**没有任何东西**能验证图的活干对了没有，扫描件更是完全没戏。而「图不漏、图注不错位」正是这个项目唯一的存在理由——把它拿掉，剩下的只是一份读起来很顺、错在哪你看不出来的东西。
 >
-> **要救很简单，装 OCR，一条命令：**
+> **要救很简单，装 [RapidOCR](https://github.com/RapidAI/RapidOCR)，两行：**
 >
 > ```bash
-> "$PY" -m pip install paddlepaddle paddleocr        # -m pip 保证装进 $PY，不是别的解释器
+> "$PY" -m pip install --no-deps rapidocr                                   # -m pip 保证装进 $PY
+> "$PY" -m pip install onnxruntime shapely pyclipper omegaconf colorlog     # 已有的会跳过
 > ```
 >
-> 三个里就它代价最小。为了翻一篇论文现装 Acrobat Pro？体积、授权、时间，没一样划算，别折腾了 😅。换个多模态模型也行，那更快。
+> **`--no-deps` 不能省**，理由见下面「依赖」一节的 OCR 说明。
 >
-> **1GB 都不肯装，那就别用，我不惯着 😡** 没有跳过参数，也别问我怎么绕——绕过去的那份译文丢的是你自己的脸，不是我的。
+> 三个里就 OCR 代价最小，而 RapidOCR 把这个代价又压掉了 90%——它跑的**就是百度那套 PP-OCR 权重**，只是换 ONNXRuntime 推理（实测快 8–28 倍，精度打平，见下）。为了翻一篇论文现装 Acrobat Pro？体积、授权、时间，没一样划算，别折腾了 😅。换个多模态模型也行，那更快。
 >
-> 补一句：**venv 会骗你。** 包装在全局、命令跑在 venv 里，`preflight.py` 报一串 MISSING、甚至直接 exit 4——**这时候先别急着装那 1GB，回上面那个 🚨 块把 `$PY` 指对**。报告开头那行解释器路径就是给你核对这件事用的，后面每条命令都得用同一个。
+> **40MB 都不肯装，那就别用，我不惯着 😡** 没有跳过参数，也别问我怎么绕——绕过去的那份译文丢的是你自己的脸，不是我的。
+>
+> 补一句：**venv 会骗你。** 包装在全局、命令跑在 venv 里，`preflight.py` 报一串 MISSING、甚至直接 exit 4——**这时候先别急着装，回上面那个 🚨 块把 `$PY` 指对**。报告开头那行解释器路径就是给你核对这件事用的，后面每条命令都得用同一个。
 >
 > ---
 >
@@ -173,7 +180,7 @@
 weakly allowed due to ┆ transitions22,23. Notably, ┆ orbital angular momentum mixing
 ```
 
-扫描件更是重灾区：OCR 按整行横扫，一行同时压到左右两栏时，左栏的半句和右栏的半句**可能**被读成同一句。这一层本项目不解决——PaddleOCR 返回什么顺序就是什么顺序。
+扫描件更是重灾区：OCR 按整行横扫，一行同时压到左右两栏时，左栏的半句和右栏的半句**可能**被读成同一句。这一层本项目不解决——OCR 返回什么顺序就是什么顺序。
 
 这些错法有个共同点，也是最阴的地方：**它们在 Markdown 里肉眼全都正常。** 词被切开、两栏拼错、段落断在句中，喂给翻译模型后**可能**产出语法通顺、排版体面、读起来很像样的错译——你不逐句对着原文看，根本抓不出来。一个为了「看起来专业」而存在的排版，最后的产物是看起来专业的胡话，挺配的。所以本项目宁可在翻译开始之前 exit 3 直接罢工，也不生产这种东西。
 
@@ -238,21 +245,51 @@ weakly allowed due to ┆ transitions22,23. Notably, ┆ orbital angular momentu
 | 读 Word 文档（首选路径） | lxml | `"$PY" -m pip install lxml` | 走 Word 路径必需 |
 | 切分图面板 | Pillow + NumPy | `"$PY" -m pip install pillow numpy` | 切面板必需 |
 | 调 Acrobat / Word 转换（Windows） | pywin32 | `"$PY" -m pip install pywin32` | **三选一之一** |
-| 扫描件 OCR / 面板标签校验 | PaddleOCR | `"$PY" -m pip install paddlepaddle paddleocr` | **三选一之一** |
+| 扫描件 OCR / 面板标签校验 | **[RapidOCR](https://github.com/RapidAI/RapidOCR)** | `"$PY" -m pip install --no-deps rapidocr` + `onnxruntime shapely pyclipper omegaconf colorlog` | **三选一之一** |
 | 理解图内容 | 多模态模型 | 见上方使用前提 | **三选一之一** |
 | Markdown → HTML | pandoc ≥ 3.0 | [pandoc.org/installing](https://pandoc.org/installing.html) | 只影响 PDF 输出 |
 | HTML → PDF | Chrome 或 Edge | 大多数系统已自带 | 只影响 PDF 输出 |
 
 标了「三选一之一」的三行，**至少要有一行成立**，否则 `preflight.py` exit 4 直接停掉——理由见上方使用前提第 1 条。
 
-**OCR 说明：**
+**OCR 说明：装 [RapidOCR](https://github.com/RapidAI/RapidOCR)。**
 
-- **不装 OCR 的前提是你有另外两个之一**（Acrobat/Word 转换器，或多模态模型）。文字型 PDF 的正文确实走文本层、用不到 OCR，但面板切分的标签校验用得到，扫描件更是非它不可
-- **安装体积约 1GB**，首次运行还会自动下载 OCR 模型（约 20MB，之后走缓存）
-- 用法：提取时加 `--ocr`；对文字型 PDF 加了也会被自动忽略，不会白跑
-- 实测版本：`paddleocr 3.7.0` + `paddlepaddle 3.3.1` + Python 3.13
-- 脚本内部强制 `enable_mkldnn=False`——部分 paddlepaddle 构建的 oneDNN 后端会直接崩（`ConvertPirAttribute2RuntimeAttribute not support`），关掉才能跑起来。你不需要做任何配置
-- **注意 numpy 会被降级**：paddlex 声明 `numpy<2.4`，装 PaddleOCR 时 pip 会把 numpy 降到 2.3.x。实测 numpy 2.5.2 下本项目用到的 OCR 路径（检测+识别）完全正常，声明偏保守；但如果你手动升 numpy，`pip check` 会报冲突，且后续安装可能又把它降回去。介意的话保持默认即可
+- **它跑的就是 PaddleOCR 那套模型。** RapidOCR 把百度的 PP-OCR 模型转成了 ONNX
+  （它自己的 README 写着 “The copyright of the OCR model is held by Baidu”），
+  所以**换过来不是精度取舍**，是同一套权重换个推理框架跑
+- **实测差距全在工程层。** 同机、同图、两组独立素材：
+
+  | 素材 | | 启动 | 每页 | 总计 | 精度 |
+  |---|---|---|---|---|---|
+  | 6 张论文插图<br>（PP-OCRv6_medium 同权重） | PaddleOCR | 7.4 s | 16.2 s | 104.7 s | — |
+  | | RapidOCR | 1.0 s | 2.0 s | **13.2 s（7.9×）** | — |
+  | | RapidOCR 默认档（v6 small） | 1.1 s | 0.76 s | **5.6 s（18.7×）** | — |
+  | 一篇 9 页论文整页 OCR<br>（真值 = PDF 自带文本层） | PaddleOCR | 6.4 s | 96.7 s | 876.7 s | 召回 99.3% / 精确 98.2% |
+  | | RapidOCR | 0.9 s | 3.3 s | **30.8 s（28.5×）** | **召回 99.3% / 精确 98.4%** |
+
+  整页比插图差距更大，原因清楚：整页有 178 个文本框、插图只有 25 个，而 PaddleOCR 的开销按框累加。
+  **越接近真实扫描件，差距越明显。**
+- **体积 40MB 对 1GB。** 卸掉 paddle 系（`paddlepaddle` + `paddleocr` + `paddlex` + `~/.paddlex`
+  模型缓存）实测腾出 **546MB**，还顺带解开了 `paddlex` 对 `numpy<2.4` 的 pin
+- **默认用 small 档不是省事，是实测更稳**：面板标签这项——`panel_split.py` 全靠它校验切分——
+  small 在 6 张图上与 PaddleOCR 逐页一致，而 medium 把其中一张的 `(b)` 读成了 `(q)`。
+  更大的模型在「从图里挑单个字母」这件事上并不自动更好
+- **旋转文本上 RapidOCR 反而更好**：它默认开着方向分类，PaddleOCR 那侧被本 skill 明确关掉了。
+  两篇不同论文上都复现：竖排纵轴 “Intensity (arb. u.)” RapidOCR 读得出，PaddleOCR 给 `nteit.u.`、
+  或整篇漏掉 `intensity`×6 / `arb`×6
+- **`--no-deps` 不能省。** `rapidocr` 声明依赖 `opencv_python`，而很多环境装的是
+  `opencv-contrib-python`——pip 视为两个包，但它们争同一个 `cv2` 目录，直接装会互相覆盖。
+  contrib 版提供的 `cv2` 完全够用：实测把 `opencv_python 5.0` 换成 `opencv-contrib-python 4.10`
+  之后，6 页输出**逐字一致**、速度不变
+- 用法：提取时加 `--ocr`；对文字型 PDF 加了也会被自动忽略，不会白跑。
+  实际用了哪个后端，看 `manifest.json` 的 `ocr_backend`
+- 实测版本：`rapidocr 3.9.2` + `onnxruntime 1.26.0` + Python 3.13
+- 想自己比一遍：`"$PY" ocr_engine.py <图片>`，它把装了的后端各跑一次并列出结果
+
+**还装着 PaddleOCR 的机器不用动。** `ocr_engine.py` 按 RapidOCR → PaddleOCR 的顺序自动挑，
+两个都在时用前者，只有 PaddleOCR 时照样能跑（内部强制 `enable_mkldnn=False`，绕开部分
+paddlepaddle 构建的 oneDNN 崩溃）。**但新装机器没有理由再选它**：慢一个数量级、大一个数量级、
+精度不占优。
 
 **不需要 LaTeX**。只翻译、不导出 PDF 的话，pandoc 和浏览器可以不装。
 
@@ -272,8 +309,9 @@ PY=python                       # 在 venv 里就换成真正要用的解释器�
 "$PY" -m pip install pymupdf pillow numpy
 
 # 非 Windows 上没有 Acrobat / Word 转换器（COM 仅 Windows），
-# 所以 OCR 和多模态模型至少得有一个。模型不能识图就装 OCR（约 1GB）：
-"$PY" -m pip install paddlepaddle paddleocr
+# 所以 OCR 和多模态模型至少得有一个。模型不能识图就装 OCR（RapidOCR，约 40MB）：
+"$PY" -m pip install --no-deps rapidocr
+"$PY" -m pip install onnxruntime shapely pyclipper omegaconf colorlog
 
 "$PY" ~/.claude/skills/paper-translator/preflight.py       # 最后跑一次确认
 ```
@@ -290,8 +328,9 @@ $PY = "python"                  # 在 venv 里就换成真正要用的解释器�
 # Acrobat / Word 全自动导出（首选第一步，见上文）
 & $PY -m pip install pywin32
 
-# 没有 Acrobat/Word、模型又不能识图时必装（约 1GB）
-& $PY -m pip install paddlepaddle paddleocr
+# 没有 Acrobat/Word、模型又不能识图时必装（RapidOCR，约 40MB）
+& $PY -m pip install --no-deps rapidocr
+& $PY -m pip install onnxruntime shapely pyclipper omegaconf colorlog
 
 & $PY "$env:USERPROFILE\.claude\skills\paper-translator\preflight.py"
 ```
@@ -363,7 +402,7 @@ Skill 由模型读 `description` 判断是否调用，`description` 里已经写
 "$PY" preflight.py --json          # 机器可读
 ```
 
-检测 PyMuPDF / lxml / Pillow+NumPy / Acrobat 或 Word（查注册表，不启动应用）/ PaddleOCR（只查可导入，不真 import，省掉几秒和一堆警告）/ pandoc / Chrome-Edge，并打印**当前解释器路径**。
+检测 PyMuPDF / lxml / Pillow+NumPy / Acrobat 或 Word（查注册表，不启动应用）/ OCR（RapidOCR，只查可导入，不真 import，省掉几秒和一堆警告）/ pandoc / Chrome-Edge，并打印**当前解释器路径**。
 
 `--multimodal` 是**调用方声明**的，脚本探测不到模型能力——这一项没法自动化，只能靠调用者诚实。
 
@@ -405,7 +444,7 @@ Skill 由模型读 `description` 判断是否调用，`description` 里已经写
 | 坑 | 处理 |
 |---|---|
 | 每段文字出现两遍 | Word 把文本框同时写成 DrawingML 和 VML 两份，跳过 `mc:Fallback` 子树 |
-| 出版商 logo 被当成图 1、图 2，真图全体错位两号 | 按像素尺寸滤掉页面装饰（Elsevier logo 只有 248×271，真图 ≥ 950） |
+| 出版商 logo 被当成图 1、图 2，真图全体错位 | 两条判据一起用：**尺寸**滤小徽标（Elsevier logo 只有 248×271，真图 ≥ 950），**形状**滤第一条图注之前长宽比 ≥ 3 的宽横幅。第二条必需——实测 Wiley 那张 `ADVANCED SCIENCE NEWS` 横幅 2933×676 是全篇最大的图，尺寸判据挡不住 |
 | 图和它自己的图注在 XML 里离得很远 | Word 把浮动图锚在附近任意一段上，所以**按顺序配对**图与图注，不按距离 |
 | 某张图的图注被粘在正文段落尾部 | 该图号从图注清单消失，按清单配号会让**之后所有图整体错位一号**（图 4 的图片被写成 fig05，配上图 5 的图注）。图注数与图数不等时，改用正文引用到的图号列表配号 |
 | 作者行、`Keywords:`、DOI、公式碎片被当成章节标题 | 标题读 Word 自己的 `Heading1..9` 样式，不靠「短且不以句号结尾」猜。实测一篇 7 页 Elsevier 论文：靠猜得到 22 个标题（其中 12 个是垃圾，包括一句被截断的正文和四段公式碎片），靠样式得到 9 个，正好是真章节。整篇没有任何标题样式时（Word COM 兜底常这样）才退回长度猜 |
@@ -451,6 +490,8 @@ OCR 读不出 `i`、`l`、`o` 是常态（细笔画），脚本会在 note 里�
 
 「补充图 2」不算提到图 2，会跳过。提及句后面紧跟公式代码块时，图插到**公式之后**——一段以「按下式估计：」收尾的话和它下面的公式是一个整体，中间塞图会让正文承诺公式却给出曲线。退出码 `3` = 有图在正文里根本找不到提及，必须去查。
 
+**译文文件名不要带圆括号。** `![...](路径)` 的路径部分匹配到第一个 `)` 就停，所以 `Small (2024) 中文翻译_figs/fig01.png` 这种路径会让整行不再算图片行——一张图都搬不动。退出码 `3` 覆盖这种情况并直接点出圆括号（在此之前它会静默报成功，是本项目修掉的第二类静默失败）。`.md` 和 `_figs` 两处名字都要改。
+
 > 走 Word 首选路径时，图的位置已经由 `docx_extract.py` 给出（比「首次提及」更准），这一步可以跳过；它主要服务于 `extract_paper.py` 回退路径。
 
 ### `extract_paper.py` — 提取文本 + 图（3.0，回退路径）
@@ -465,7 +506,7 @@ OCR 读不出 `i`、`l`、`o` 是常态（细笔画），脚本会在 note 里�
 
 | 参数 | 作用 |
 |---|---|
-| `--ocr` | 扫描件用 PaddleOCR 提取文字。文字型 PDF 会自动忽略此参数 |
+| `--ocr` | 扫描件用 [RapidOCR](https://github.com/RapidAI/RapidOCR) 提取文字。文字型 PDF 会自动忽略此参数 |
 | `--ocr-lang en` | OCR 语种：`en` / `ch`（中英混排）/ `japan` / `korean` 等，默认 `en` |
 | `--pages 21-24` | 强制渲染指定页面（图数量告警时用） |
 | `--dpi 200` | 渲染分辨率，扫描件识别率低时改 `300` |
@@ -475,7 +516,7 @@ OCR 读不出 `i`、`l`、`o` 是常态（细笔画），脚本会在 note 里�
 |---|---|
 | `0` | 图数量与正文引用一致 |
 | `3` | **图可能漏了** — 查 `manifest.json` 的 `per_page`，用 `--pages` 强制渲染 |
-| `1` | 出错（通常是缺 PyMuPDF 或缺 paddleocr） |
+| `1` | 出错（通常是缺 PyMuPDF，或两个 OCR 后端都没装） |
 
 输出示例：
 
@@ -495,7 +536,7 @@ referenced  : Fig [1, 2, 3, 4]
 OCR: scanned PDF, reading 1 pages (lang=en; first run downloads models)...
   p  1: 336 chars
 pages       : 1  (text pages: 1)
-OCR         : PaddleOCR (lang=en)
+OCR         : RapidOCR (lang=en)
 figures     : 1 rendered -> ./figures
 referenced  : Fig [1]
 

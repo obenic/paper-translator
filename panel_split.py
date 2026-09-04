@@ -16,7 +16,8 @@ perfectly fine on its own. So every crop is checked four ways:
     3. ink conservation - the crops together hold ~all the ink of the figure
     4. text conservation- every OCR text box of the figure falls inside a crop
 
-Checks 1 and 4 need OCR (PaddleOCR). Without it, 2 and 3 still run and the
+Checks 1 and 4 need OCR (RapidOCR preferred, PaddleOCR fallback). Without it,
+2 and 3 still run and the
 result is reported as low-confidence rather than silently trusted.
 
 Panel labels are the ground truth for how many panels exist. Cut lines are
@@ -63,6 +64,11 @@ MIN_PANEL_FRAC = 0.004
 # figure's shorter side. Wide enough to span "dense multi-panel" to "two
 # big plots side by side".
 GUTTER_SWEEP = (0.006, 0.008, 0.010, 0.013, 0.016, 0.020, 0.025, 0.030, 0.040)
+
+# Which OCR backend actually served the last run_ocr call, for the report.
+# Not a return value: the caller folds notes into `problems`, and which engine
+# ran is not a problem.
+_OCR_BACKEND = None
 
 # Panel labels come bare ('a'), parenthesised ('(a)'), half-closed ('a)'), or
 # with a sub-index ('(a1)', 'b2'). Elsevier and IEEE prefer parentheses;
@@ -128,38 +134,34 @@ def run_ocr(rgb, lang="en"):
     One pass over the whole figure, never once per crop: every later check
     assigns these boxes to crops geometrically, which is both faster and
     consistent (re-OCR of a crop can read different text than the whole).
-    """
-    try:
-        from paddleocr import PaddleOCR
-    except ImportError:
-        return None, "PaddleOCR not installed (pip install paddlepaddle paddleocr)"
-    try:
-        engine = PaddleOCR(
-            use_doc_orientation_classify=False,
-            use_doc_unwarping=False,
-            use_textline_orientation=False,
-            lang=lang,
-            enable_mkldnn=False,
-        )
-        res = engine.predict(rgb[:, :, ::-1])   # PaddleOCR wants BGR
-    except Exception as e:                      # noqa: BLE001 - report, don't crash
-        return None, f"OCR failed: {e}"
-    if not res:
-        return [], None
 
-    page = res[0]
-    texts = page.get("rec_texts") or []
-    polys = page.get("rec_polys")
-    if polys is None:
-        polys = page.get("dt_polys") or []
-    out = []
-    for text, poly in zip(texts, polys):
-        pts = np.asarray(poly, dtype=float).reshape(-1, 2)
-        out.append({
-            "text": str(text).strip(),
-            "box": (int(pts[:, 0].min()), int(pts[:, 1].min()),
-                    int(pts[:, 0].max()) + 1, int(pts[:, 1].max()) + 1),
-        })
+    Backend comes from ocr_engine.py - RapidOCR first, PaddleOCR as fallback.
+    RapidOCR's lighter default matched PaddleOCR on the panel labels across
+    all 6 test figures while starting ~7x faster, which is what this call
+    actually depends on.
+    """
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+    try:
+        import ocr_engine
+    except ImportError:
+        return None, "ocr_engine.py must sit next to panel_split.py"
+
+    engine, backend, note = ocr_engine.make_engine(lang=lang)
+    if engine is None:
+        return None, note
+    try:
+        rows = ocr_engine.read(engine, rgb)     # adapter takes RGB
+    except Exception as e:                      # noqa: BLE001 - report, don't crash
+        return None, f"OCR failed ({backend}): {e}"
+
+    # Which backend ran is diagnostic, not a problem: the caller appends any
+    # note to `problems`, which drives the exit code, so a successful run -
+    # including one that fell back to PaddleOCR - must report no note at all.
+    global _OCR_BACKEND
+    _OCR_BACKEND = backend + (f" ({note})" if note else "")
+
+    out = [{"text": r["text"], "box": r["box"]}
+           for r in rows if r["box"] is not None]
     return out, None
 
 
@@ -894,6 +896,7 @@ def split_figure(source, out_dir, stem="fig", layout=None, grid=None,
         "panels": written,
         "panel_count": len(written),
         "ocr_available": bool(ocr),
+        "ocr_backend": _OCR_BACKEND,
         "problems": problems,
         "ok": not problems,
         **stats,

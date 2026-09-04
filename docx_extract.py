@@ -77,6 +77,13 @@ SKIP_SECTION_RE = re.compile(
     r"Declaration of competing interest|CRediT|Data availability|"
     r"Funding|Appendix|Supplementary (data|material))\b", re.I)
 
+# An image at least this many times wider than tall, sitting above the first
+# caption, is a publisher banner rather than a figure. Measured on 18 real
+# figures from two journals: the widest was 2.33 (a single row of panels),
+# while the banner that broke the size-only test was 4.34 and the small badges
+# are 5.07. 3.0 sits in the empty gap between them.
+BANNER_RATIO = 3.0
+
 
 def image_rels(zf):
     """rId -> media path, from word/_rels/document.xml.rels."""
@@ -232,7 +239,7 @@ def classify(stream):
 
 
 def image_sizes(zf, records):
-    """Pixel size of every referenced image, for telling figures from logos."""
+    """(width, height) of every referenced image, for telling figures from logos."""
     from io import BytesIO
     try:
         from PIL import Image
@@ -244,9 +251,9 @@ def image_sizes(zf, records):
             continue
         try:
             with Image.open(BytesIO(zf.read(rec["media"]))) as im:
-                sizes[rec["media"]] = max(im.size)
+                sizes[rec["media"]] = im.size
         except Exception:                       # noqa: BLE001
-            sizes[rec["media"]] = 0
+            sizes[rec["media"]] = (0, 0)
     return sizes
 
 
@@ -267,19 +274,43 @@ def number_figures(zf, records):
     nearest-caption: Word anchors a floating figure to whatever paragraph
     happened to be nearby, so the distance from an image to its own caption in
     the XML says nothing, while the *order* of the figures still holds.
+
+    Furniture is caught two ways, because either test alone lets one through:
+
+      by size    anything well under the median long side - the small badges
+      by shape   a wide banner ahead of the first caption
+
+    The shape test exists because size alone missed a real case: a Wiley paper
+    carried an "ADVANCED SCIENCE NEWS" banner at 2933x676, the LARGEST image in
+    the file, so it sailed past the size floor, took the number Fig 1, and
+    pushed every real figure down one. Both conditions are required together -
+    position alone would also drop the paper's genuine first figure, which in
+    that same file sits ahead of the first caption paragraph too.
     """
     sizes = image_sizes(zf, records)
-    long_sides = sorted(v for v in sizes.values() if v)
+    long_sides = sorted(max(wh) for wh in sizes.values() if max(wh))
     if long_sides:
         median = long_sides[len(long_sides) // 2]
         floor = max(400, int(0.25 * median))
     else:
         floor = 0
 
+    # Index of the first caption record; images before it are candidates for
+    # the banner test. -1 when no caption was found, which disables the test
+    # rather than condemning every image in the file.
+    first_caption = next((i for i, r in enumerate(records)
+                          if r["kind"] == "caption"), -1)
+
     images = [r for r in records if r["kind"] == "image"]
-    for rec in images:
-        if sizes.get(rec["media"], 0) < floor:
-            rec["furniture"] = True
+    for i, rec in enumerate(records):
+        if rec["kind"] != "image":
+            continue
+        w, h = sizes.get(rec["media"], (0, 0))
+        if max(w, h) < floor:
+            rec["furniture"] = True             # small badge
+        elif (first_caption >= 0 and i < first_caption
+              and min(w, h) and max(w, h) / min(w, h) >= BANNER_RATIO):
+            rec["furniture"] = True             # wide banner above any caption
 
     figures = [r for r in images if not rec_is_furniture(r)]
     captions = sorted({r["figure"] for r in records if r["kind"] == "caption"})

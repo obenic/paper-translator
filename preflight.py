@@ -7,8 +7,8 @@ the pipeline, and at least ONE of them must be present:
   A  PDF -> Word converter   Acrobat Pro or Word over COM (Windows only).
                              Puts every figure back where it belongs in the
                              body text, so nothing has to be guessed.
-  B  PaddleOCR               Reads scanned pages, and validates a panel split
-                             by matching the a/b/c labels it reads back.
+  B  OCR (RapidOCR /         Reads scanned pages, and validates a panel split
+     PaddleOCR)              by matching the a/b/c labels it reads back.
   C  a multimodal model       Reads the rendered figures directly. No script
                              can detect this, so the caller declares it with
                              --multimodal.
@@ -17,7 +17,9 @@ With none of the three, scanned PDFs are impossible outright and nothing is
 left that can catch a wrong panel split or a swapped caption - the two
 failure modes this skill exists to prevent. So the run stops here.
 
-PaddleOCR is the cheapest way out: ~1GB and one pip command. Installing
+OCR is the cheapest way out, and RapidOCR is the cheaper of the two backends:
+it runs the same PP-OCR weights through ONNXRuntime, so about 40MB against
+PaddleOCR's ~1GB, and measured 8-19x faster to start and to run. Installing
 Acrobat Pro just to translate one paper is not a reasonable ask.
 
 Usage:
@@ -28,7 +30,7 @@ Usage:
 Exit codes:
     0  at least one figure capability is available
     1  PyMuPDF missing - nothing in this skill runs without it
-    4  no figure capability at all - install PaddleOCR, or stop
+    4  no figure capability at all - install RapidOCR, or stop
 """
 
 import argparse
@@ -44,10 +46,15 @@ from typing import Dict, List, Optional
 HERE = os.path.dirname(os.path.abspath(__file__))
 
 CAP_CONVERTER = "PDF -> Word converter"
-CAP_OCR = "PaddleOCR"
+CAP_OCR = "OCR"
 CAP_VISION = "multimodal model"
 
-OCR_INSTALL = "pip install paddlepaddle paddleocr"
+# RapidOCR first: same PP-OCR weights, ~40MB instead of ~1GB, and 8-19x faster
+# to start and run. onnxruntime is a separate install because RapidOCR leaves
+# the choice of execution provider to the user.
+OCR_INSTALL = ("pip install --no-deps rapidocr && "
+               "pip install onnxruntime shapely pyclipper omegaconf colorlog")
+OCR_INSTALL_ALT = "pip install paddlepaddle paddleocr    (~1GB, the fallback)"
 
 
 @dataclass(frozen=True)
@@ -154,8 +161,30 @@ def probe_converter() -> Probe:
 
 
 def probe_ocr() -> Probe:
-    """Capability B - PaddleOCR (needs both paddleocr and paddle)."""
-    return probe_module("ocr", CAP_OCR, ["paddleocr", "paddle"], OCR_INSTALL)
+    """Capability B - either OCR backend counts, RapidOCR reported first.
+
+    Reuses ocr_engine.available() so the preflight and the scripts can never
+    disagree about what is installed. It uses find_spec, so PaddleOCR is not
+    imported just to answer yes/no.
+    """
+    if HERE not in sys.path:
+        sys.path.insert(0, HERE)
+    try:
+        import ocr_engine
+    except ImportError:
+        # Fall back to probing directly, so a missing ocr_engine.py does not
+        # look like a missing OCR install.
+        rapid = _spec("rapidocr")
+        paddle = _spec("paddleocr") and _spec("paddle")
+        found = ([ocr_engine_name for ocr_engine_name, ok
+                  in (("RapidOCR", rapid), ("PaddleOCR", paddle)) if ok])
+    else:
+        found = ocr_engine.available()
+
+    if not found:
+        return Probe("ocr", CAP_OCR, False, "MISSING both backends",
+                     OCR_INSTALL)
+    return Probe("ocr", CAP_OCR, True, " + ".join(found))
 
 
 def probe_vision(declared: bool) -> Probe:
@@ -278,7 +307,8 @@ def verdict(probes: Dict[str, Probe]) -> int:
               "Scanned PDFs are impossible, and nothing is left that could "
               "catch a\nwrong panel split or a caption pinned to the wrong "
               "figure - the two\nfailures this skill exists to prevent.\n\n"
-              f"Cheapest fix, about 1GB, one command:\n    {OCR_INSTALL}\n\n"
+              f"Cheapest fix, about 40MB:\n    {OCR_INSTALL}\n"
+              f"  or, the heavier fallback:\n    {OCR_INSTALL_ALT}\n\n"
               "Installing Acrobat Pro for one paper is not reasonable; a "
               "multimodal\nmodel works too (rerun with --multimodal). "
               "Otherwise translate this\npaper with something else.\n\n"
@@ -308,7 +338,7 @@ def verdict(probes: Dict[str, Probe]) -> int:
               "to confirm each split by eye")
     if not (probes["ocr"].ok or probes["vision"].ok):
         print("  scanned   : NO - a scanned PDF cannot be read at all "
-              "(needs PaddleOCR or a multimodal model)")
+              "(needs an OCR backend or a multimodal model)")
     if not probes["converter"].ok:
         print("  figures   : positions are guessed by insert_figures.py "
               "(first mention), not taken from the source layout")
