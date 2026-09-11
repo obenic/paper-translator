@@ -2,7 +2,9 @@
 """Check whether this machine can deliver a figure-complete translation.
 
 Runs before anything else. Three capabilities can carry the figures through
-the pipeline, and at least ONE of them must be present:
+the pipeline. At least ONE is required for scanned PDFs or image
+cross-validation; a text-layer PDF may explicitly opt into an unverified
+whole-figure path with ``--allow-unverified``.
 
   A  PDF -> Word converter   Acrobat Pro or Word over COM (Windows only).
                              Puts every figure back where it belongs in the
@@ -13,9 +15,9 @@ the pipeline, and at least ONE of them must be present:
                              can detect this, so the caller declares it with
                              --multimodal.
 
-With none of the three, scanned PDFs are impossible outright and nothing is
-left that can catch a wrong panel split or a swapped caption - the two
-failure modes this skill exists to prevent. So the run stops here.
+With none of the three, scanned PDFs are impossible outright and panel
+cross-validation cannot be claimed. The explicit unverified mode exists only
+for a text-layer PDF when the user chooses to skip image cross-validation.
 
 OCR is the cheapest way out, and RapidOCR is the cheaper of the two backends:
 it runs the same PP-OCR weights through ONNXRuntime, so about 40MB against
@@ -25,10 +27,11 @@ Acrobat Pro just to translate one paper is not a reasonable ask.
 Usage:
     python preflight.py                  # report + verdict
     python preflight.py --multimodal     # the calling model can read images
+    python preflight.py --allow-unverified # text-layer PDF; user skipped validation
     python preflight.py --json           # machine-readable report
 
 Exit codes:
-    0  at least one figure capability is available
+    0  at least one figure capability is available, or unverified mode is allowed
     1  PyMuPDF missing - nothing in this skill runs without it
     4  no figure capability at all - install RapidOCR, or stop
 """
@@ -257,11 +260,11 @@ def usable_caps(probes: Dict[str, Probe]) -> List[Probe]:
     return out
 
 
-def decide(probes: Dict[str, Probe]) -> int:
-    """The exit code, from one place, so report and --json never disagree."""
+def decide(probes: Dict[str, Probe], allow_unverified: bool = False) -> int:
+    """Return the gate code, optionally allowing text-only unverified work."""
     if not probes["pymupdf"].ok:
         return 1
-    return 0 if usable_caps(probes) else 4
+    return 0 if usable_caps(probes) or allow_unverified else 4
 
 
 def render(probes: Dict[str, Probe]) -> None:
@@ -292,10 +295,10 @@ def _row(p: Probe) -> None:
         print(f"      -> {p.fix}")
 
 
-def verdict(probes: Dict[str, Probe]) -> int:
+def verdict(probes: Dict[str, Probe], allow_unverified: bool = False) -> int:
     """Print what this machine can and cannot do, and return the exit code."""
     sys.stdout.flush()          # keep the report above the STOP block
-    code = decide(probes)
+    code = decide(probes, allow_unverified)
     if code == 1:
         print("\nSTOP: PyMuPDF missing. Nothing in this skill runs without "
               "it.\n    pip install pymupdf", file=sys.stderr)
@@ -322,7 +325,10 @@ def verdict(probes: Dict[str, Probe]) -> int:
         return 4
 
     print("\nverdict")
-    print("  available : " + ", ".join(p.label for p in caps))
+    print("  available : " + (", ".join(p.label for p in caps) or "none"))
+    if allow_unverified and not caps:
+        print("  unverified: allowed - continue only for a text-layer PDF after "
+              "the user explicitly skipped image cross-validation")
 
     if probes["converter"].ok and not probes["lxml"].ok:
         print("  converter : found but UNUSABLE without lxml "
@@ -356,13 +362,16 @@ def main() -> int:
         description="Preflight the paper-translator environment.")
     ap.add_argument("--multimodal", action="store_true",
                     help="declare that the calling model can read images")
+    ap.add_argument("--allow-unverified", action="store_true",
+                    help="allow text-layer work without converter/OCR/vision; "
+                         "never makes scanned PDFs or panel splits verified")
     ap.add_argument("--json", action="store_true",
                     help="machine-readable report on stdout")
     args = ap.parse_args()
 
     probes = collect(args.multimodal)
     if args.json:
-        code = decide(probes)
+        code = decide(probes, args.allow_unverified)
         print(json.dumps({
             "interpreter": sys.executable,
             "probes": {k: asdict(v) for k, v in probes.items()},
@@ -372,7 +381,7 @@ def main() -> int:
         return code
 
     render(probes)
-    return verdict(probes)
+    return verdict(probes, args.allow_unverified)
 
 
 if __name__ == "__main__":

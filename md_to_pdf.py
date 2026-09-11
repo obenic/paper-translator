@@ -24,6 +24,7 @@ Usage:
 Exit codes:
     0  PDF written and verified
     1  error (missing pandoc / no browser / render failed)
+    3  images went missing between the Markdown and the HTML
 """
 
 import argparse
@@ -33,6 +34,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import urllib.parse
 from pathlib import Path
 
 BROWSERS = [
@@ -181,6 +183,70 @@ def strip_md_toc(text: str) -> tuple:
     return out, bool(n)
 
 
+def _image_spans(line: str):
+    """Yield (dest_start, dest_end) for every ![alt](dest) on one line.
+
+    Hand-rolled instead of a regex because both halves nest: captions carry
+    [brackets] and (parentheses), and the destination may itself contain
+    parentheses. Bracket-match the alt text, then paren-match the target.
+    """
+    i = 0
+    while True:
+        i = line.find("![", i)
+        if i < 0:
+            return
+        j, depth = i + 2, 1
+        while j < len(line) and depth:
+            if line[j] == "[":
+                depth += 1
+            elif line[j] == "]":
+                depth -= 1
+            j += 1
+        if depth or j >= len(line) or line[j] != "(":
+            i += 2
+            continue
+        start = j + 1
+        k, depth = start, 1
+        while k < len(line) and depth:
+            if line[k] == "(":
+                depth += 1
+            elif line[k] == ")":
+                depth -= 1
+            k += 1
+        if depth:                      # unbalanced: fall back to the last ')'
+            k = line.rfind(")") + 1
+            if k <= start:
+                i = start
+                continue
+        yield start, k - 1
+        i = k
+
+
+def safe_image_paths(text: str) -> tuple:
+    """Wrap image destinations pandoc would mis-parse in <angle brackets>.
+
+    A bare `![](dir with spaces/x.png)` ends at the FIRST space as far as
+    CommonMark is concerned, so the line stops being an image and the picture
+    is dropped from the PDF with no warning at all. Pointy-bracket
+    destinations are the spec's own escape hatch and also cover stray
+    parentheses. Applied to a temp copy only; the user's file is untouched.
+
+    Returns (text, [destinations that were wrapped]).
+    """
+    fixed, out = [], []
+    for line in text.split("\n"):
+        for start, end in reversed(list(_image_spans(line))):
+            dest = line[start:end]
+            bare = dest.split(" \"")[0].split(" '")[0].strip()
+            if bare.startswith("<") or not (" " in bare or "(" in bare
+                                            or ")" in bare):
+                continue
+            line = f"{line[:start]}<{bare}>{line[end:]}"
+            out.append(bare)
+        fixed.append(line)
+    return "\n".join(fixed), out
+
+
 def tidy_toc(html: str) -> tuple:
     """Drop figure entries from pandoc's nav and move it below the title.
 
@@ -265,11 +331,15 @@ def main():
     html = (md.with_suffix(".html") if args.keep_html else tmp / "doc.html")
 
     # add_toc.py's block would collide with pandoc's --toc, so feed pandoc a
-    # copy without it. The user's file is never touched.
+    # copy without it. Image destinations containing spaces are rewritten in
+    # the same copy - pandoc drops such images silently otherwise. The user's
+    # file is never touched.
     src_text = md.read_text(encoding="utf-8")
     stripped, had_md_toc = strip_md_toc(src_text)
+    stripped, wrapped = safe_image_paths(stripped)
+    md_images = sum(len(list(_image_spans(l))) for l in stripped.split("\n"))
     src = md
-    if had_md_toc:
+    if had_md_toc or wrapped:
         src = tmp / md.name
         with open(src, "w", encoding="utf-8", newline="\n") as f:
             f.write(stripped)
@@ -292,6 +362,28 @@ def main():
     if r.returncode != 0:
         print(f"ERROR: pandoc failed:\n{r.stderr}", file=sys.stderr)
         return 1
+
+    # Count what actually survived into the HTML. A caption that pandoc could
+    # not read as an image becomes plain text: no error, no missing file, just
+    # a PDF with the pictures quietly gone. Only the byte size gives it away,
+    # so check here instead of trusting the exit code.
+    page_html = html.read_text(encoding="utf-8")
+    html_images = page_html.count("<img ")
+    embedded = page_html.count('src="data:')
+    if html_images < md_images or embedded < html_images:
+        print(f"ERROR: {md_images} image(s) in the Markdown but "
+              f"{html_images} in the HTML ({embedded} embedded).",
+              file=sys.stderr)
+        print("       pandoc could not parse or could not find some of them.",
+              file=sys.stderr)
+        for line in stripped.split("\n"):
+            for start, end in _image_spans(line):
+                dest = line[start:end].strip().strip("<>")
+                # a hand-written path may already be percent-encoded
+                probe = urllib.parse.unquote(dest)
+                if dest and not (md.parent / probe).exists():
+                    print(f"       missing file: {dest}", file=sys.stderr)
+        return 3
 
     toc_entries = toc_dropped = 0
     if args.toc:
@@ -338,6 +430,8 @@ def main():
     print(f"pdf    : {out}")
     print(f"size   : {out.stat().st_size / 1024 / 1024:.1f} MB")
     print(f"pages  : {pages}")
+    print(f"images : {embedded} embedded"
+          + (f" ({len(wrapped)} path(s) auto-wrapped)" if wrapped else ""))
     print(f"font   : {args.font}")
     if not args.toc:
         print("toc    : off (--no-toc)")
