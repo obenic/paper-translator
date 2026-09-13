@@ -1,39 +1,18 @@
 #!/usr/bin/env python
-"""Check whether this machine can deliver a figure-complete translation.
+"""Check the Acrobat Pro and RapidOCR routes before processing a paper.
 
-Runs before anything else. Three capabilities can carry the figures through
-the pipeline. At least ONE is required for scanned PDFs or image
-cross-validation; a text-layer PDF may explicitly opt into an unverified
-whole-figure path with ``--allow-unverified``.
-
-  A  PDF -> Word converter   Acrobat Pro or Word over COM (Windows only).
-                             Puts every figure back where it belongs in the
-                             body text, so nothing has to be guessed.
-  B  OCR (RapidOCR /         Reads scanned pages, and validates a panel split
-     PaddleOCR)              by matching the a/b/c labels it reads back.
-  C  a multimodal model       Reads the rendered figures directly. No script
-                             can detect this, so the caller declares it with
-                             --multimodal.
-
-With none of the three, scanned PDFs are impossible outright and panel
-cross-validation cannot be claimed. The explicit unverified mode exists only
-for a text-layer PDF when the user chooses to skip image cross-validation.
-
-OCR is the cheapest way out, and RapidOCR is the cheaper of the two backends:
-it runs the same PP-OCR weights through ONNXRuntime, so about 40MB against
-PaddleOCR's ~1GB, and measured 8-19x faster to start and to run. Installing
-Acrobat Pro just to translate one paper is not a reasonable ask.
+At least one route and its dependencies must be usable, even for a PDF with
+a text layer. If neither is available, stop and obtain the user's explicit
+consent to download/install RapidOCR. This script never installs anything.
 
 Usage:
     python preflight.py                  # report + verdict
-    python preflight.py --multimodal     # the calling model can read images
-    python preflight.py --allow-unverified # text-layer PDF; user skipped validation
     python preflight.py --json           # machine-readable report
 
 Exit codes:
-    0  at least one figure capability is available, or unverified mode is allowed
+    0  Acrobat Pro or RapidOCR is usable
     1  PyMuPDF missing - nothing in this skill runs without it
-    4  no figure capability at all - install RapidOCR, or stop
+    4  neither route is usable - request consent to install RapidOCR, or stop
 """
 
 import argparse
@@ -48,16 +27,15 @@ from typing import Dict, List, Optional
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 
-CAP_CONVERTER = "PDF -> Word converter"
-CAP_OCR = "OCR"
-CAP_VISION = "multimodal model"
+CAP_CONVERTER = "Acrobat Pro"
+CAP_OCR = "RapidOCR"
 
 # RapidOCR first: same PP-OCR weights, ~40MB instead of ~1GB, and 8-19x faster
 # to start and run. onnxruntime is a separate install because RapidOCR leaves
 # the choice of execution provider to the user.
-OCR_INSTALL = ("pip install --no-deps rapidocr && "
-               "pip install onnxruntime shapely pyclipper omegaconf colorlog")
-OCR_INSTALL_ALT = "pip install paddlepaddle paddleocr    (~1GB, the fallback)"
+OCR_INSTALL = ("pip install --no-deps rapidocr\n"
+               "    pip install onnxruntime shapely pyclipper omegaconf "
+               "colorlog numpy pillow requests tqdm six PyYAML python-docx")
 
 
 @dataclass(frozen=True)
@@ -72,11 +50,7 @@ class Probe:
 
 
 def _spec(name: str) -> bool:
-    """True if a module is importable, without paying to import it.
-
-    PaddleOCR pulls in paddle and takes seconds to import, so a preflight
-    must never import it just to answer yes/no.
-    """
+    """True if a module is discoverable, without starting an OCR engine."""
     try:
         return importlib.util.find_spec(name) is not None
     except (ImportError, ValueError):
@@ -86,8 +60,7 @@ def _spec(name: str) -> bool:
 def _acrobat_exe() -> Optional[str]:
     """Acrobat's install path from its App Paths entry, or None.
 
-    Duplicated from pdf_to_docx.py on purpose: that module imports winreg at
-    top level, so importing it here would break every non-Windows run.
+    Kept local so probing does not import the converter or launch an app.
     """
     import winreg
 
@@ -107,8 +80,8 @@ def _acrobat_exe() -> Optional[str]:
 def _progid_registered(progid: str) -> bool:
     """True if a COM ProgID is registered - without launching the app.
 
-    pdf_to_docx.py --check starts Word to find out, which costs seconds and
-    pops a process. Reading the registration is enough for a preflight.
+    Actual export is checked by the converter. A preflight only reads the
+    registration and must not start Acrobat.
     """
     import winreg
 
@@ -143,7 +116,7 @@ def probe_module(key: str, label: str, mods: List[str], fix: str) -> Probe:
 
 
 def probe_converter() -> Probe:
-    """Capability A - Acrobat Pro or Word reachable over COM."""
+    """Capability A - Acrobat registered for COM; Word does not count."""
     if sys.platform != "win32":
         return Probe("converter", CAP_CONVERTER, False,
                      f"no - COM is Windows only (this is {sys.platform})")
@@ -151,51 +124,22 @@ def probe_converter() -> Probe:
         return Probe("converter", CAP_CONVERTER, False,
                      "no - pywin32 MISSING", "pip install pywin32")
 
-    engines = []
     exe = _acrobat_exe()
-    if exe:
-        engines.append("Acrobat Pro")
-    if _progid_registered("Word.Application"):
-        engines.append("Word")
-    if not engines:
+    if not exe or not _progid_registered("AcroExch.App"):
         return Probe("converter", CAP_CONVERTER, False,
-                     "no - neither Acrobat Pro nor Word is installed")
-    return Probe("converter", CAP_CONVERTER, True, " + ".join(engines))
+                     "no - Acrobat is not installed or COM is not registered")
+    return Probe("converter", CAP_CONVERTER, True,
+                 f"registered ({exe}); export is checked during conversion")
 
 
 def probe_ocr() -> Probe:
-    """Capability B - either OCR backend counts, RapidOCR reported first.
-
-    Reuses ocr_engine.available() so the preflight and the scripts can never
-    disagree about what is installed. It uses find_spec, so PaddleOCR is not
-    imported just to answer yes/no.
-    """
-    if HERE not in sys.path:
-        sys.path.insert(0, HERE)
-    try:
-        import ocr_engine
-    except ImportError:
-        # Fall back to probing directly, so a missing ocr_engine.py does not
-        # look like a missing OCR install.
-        rapid = _spec("rapidocr")
-        paddle = _spec("paddleocr") and _spec("paddle")
-        found = ([ocr_engine_name for ocr_engine_name, ok
-                  in (("RapidOCR", rapid), ("PaddleOCR", paddle)) if ok])
-    else:
-        found = ocr_engine.available()
-
-    if not found:
-        return Probe("ocr", CAP_OCR, False, "MISSING both backends",
-                     OCR_INSTALL)
-    return Probe("ocr", CAP_OCR, True, " + ".join(found))
-
-
-def probe_vision(declared: bool) -> Probe:
-    """Capability C - caller-declared, because no probe can see the model."""
-    if declared:
-        return Probe("vision", CAP_VISION, True, "declared by caller")
-    return Probe("vision", CAP_VISION, False,
-                 "not declared", "pass --multimodal if the model reads images")
+    """Capability B - RapidOCR and its runtime dependencies only."""
+    return probe_module(
+        "ocr", CAP_OCR,
+        ["rapidocr", "onnxruntime", "cv2", "numpy", "PIL", "shapely",
+         "pyclipper", "omegaconf", "colorlog", "requests", "tqdm", "six", "yaml"],
+        OCR_INSTALL + "\n    install opencv-python only if cv2 is absent",
+    )
 
 
 def probe_browser() -> Probe:
@@ -214,16 +158,16 @@ def probe_browser() -> Probe:
     return Probe("browser", "Chrome / Edge", True, os.path.basename(found))
 
 
-def collect(multimodal: bool) -> Dict[str, Probe]:
+def collect() -> Dict[str, Probe]:
     """Run every probe once, in report order."""
     probes = [
         probe_pymupdf(),
         probe_module("lxml", "lxml", ["lxml"], "pip install lxml"),
         probe_module("imaging", "Pillow + NumPy", ["PIL", "numpy"],
                      "pip install pillow numpy"),
+        probe_module("docx", "python-docx", ["docx"], "pip install python-docx"),
         probe_converter(),
         probe_ocr(),
-        probe_vision(multimodal),
         probe_pandoc(),
         probe_browser(),
     ]
@@ -240,12 +184,12 @@ def probe_pandoc() -> Probe:
 
 
 def figure_caps(probes: Dict[str, Probe]) -> List[Probe]:
-    """The three capabilities the gate is about, in preference order."""
-    return [probes["converter"], probes["ocr"], probes["vision"]]
+    """The two capabilities the gate is about, in preference order."""
+    return [probes["converter"], probes["ocr"]]
 
 
 def usable_caps(probes: Dict[str, Probe]) -> List[Probe]:
-    """Of the three, the ones whose own dependencies are also satisfied.
+    """The routes whose own dependencies are also satisfied.
 
     A converter without lxml is worthless here: docx_extract.py parses the
     exported .docx with lxml, so the Word path dies one step later. Counting
@@ -254,17 +198,17 @@ def usable_caps(probes: Dict[str, Probe]) -> List[Probe]:
     out = []
     if probes["converter"].ok and probes["lxml"].ok:
         out.append(probes["converter"])
-    for key in ("ocr", "vision"):
-        if probes[key].ok:
-            out.append(probes[key])
+    if (probes["ocr"].ok and probes["imaging"].ok
+            and probes["docx"].ok and probes["lxml"].ok):
+        out.append(probes["ocr"])
     return out
 
 
-def decide(probes: Dict[str, Probe], allow_unverified: bool = False) -> int:
-    """Return the gate code, optionally allowing text-only unverified work."""
+def decide(probes: Dict[str, Probe]) -> int:
+    """Return the gate code without a bypass for text-layer PDFs."""
     if not probes["pymupdf"].ok:
         return 1
-    return 0 if usable_caps(probes) or allow_unverified else 4
+    return 0 if usable_caps(probes) else 4
 
 
 def render(probes: Dict[str, Probe]) -> None:
@@ -275,7 +219,7 @@ def render(probes: Dict[str, Probe]) -> None:
           "(an active venv shadows a global install).")
 
     print("\nrequired")
-    for key in ("pymupdf", "lxml", "imaging"):
+    for key in ("pymupdf", "lxml", "imaging", "docx"):
         _row(probes[key])
 
     print("\nfigure capabilities (need at least one)")
@@ -295,10 +239,10 @@ def _row(p: Probe) -> None:
         print(f"      -> {p.fix}")
 
 
-def verdict(probes: Dict[str, Probe], allow_unverified: bool = False) -> int:
+def verdict(probes: Dict[str, Probe]) -> int:
     """Print what this machine can and cannot do, and return the exit code."""
     sys.stdout.flush()          # keep the report above the STOP block
-    code = decide(probes, allow_unverified)
+    code = decide(probes)
     if code == 1:
         print("\nSTOP: PyMuPDF missing. Nothing in this skill runs without "
               "it.\n    pip install pymupdf", file=sys.stderr)
@@ -306,15 +250,14 @@ def verdict(probes: Dict[str, Probe], allow_unverified: bool = False) -> int:
 
     caps = usable_caps(probes)
     if code == 4:
-        print("\nSTOP: no way to verify any figure work on this machine.\n\n"
-              "Scanned PDFs are impossible, and nothing is left that could "
-              "catch a\nwrong panel split or a caption pinned to the wrong "
-              "figure - the two\nfailures this skill exists to prevent.\n\n"
-              f"Cheapest fix, about 40MB:\n    {OCR_INSTALL}\n"
-              f"  or, the heavier fallback:\n    {OCR_INSTALL_ALT}\n\n"
-              "Installing Acrobat Pro for one paper is not reasonable; a "
-              "multimodal\nmodel works too (rerun with --multimodal). "
-              "Otherwise translate this\npaper with something else.\n\n"
+        print("\nSTOP: neither Acrobat Pro nor RapidOCR is usable.\n"
+              "Obtain the user's explicit consent to download and install "
+              "RapidOCR\nbefore running any installation command. If consent "
+              "is refused or pending,\nstop; a text-layer PDF does not bypass "
+              "this requirement.\n\n"
+              f"After consent, use this interpreter:\n    {OCR_INSTALL}\n"
+              "If cv2 is absent, also install opencv-python; do not replace "
+              "an existing OpenCV package.\n\n"
               f"Installing into a different python than\n    {sys.executable}"
               "\nwill not help - check the interpreter line above.",
               file=sys.stderr)
@@ -326,31 +269,24 @@ def verdict(probes: Dict[str, Probe], allow_unverified: bool = False) -> int:
 
     print("\nverdict")
     print("  available : " + (", ".join(p.label for p in caps) or "none"))
-    if allow_unverified and not caps:
-        print("  unverified: allowed - continue only for a text-layer PDF after "
-              "the user explicitly skipped image cross-validation")
-
     if probes["converter"].ok and not probes["lxml"].ok:
         print("  converter : found but UNUSABLE without lxml "
               "(docx_extract.py needs it) - pip install lxml")
     if not probes["imaging"].ok:
         print("  panels    : cannot split at all - Pillow/NumPy missing, "
               "figures stay whole")
-    elif not (probes["ocr"].ok or probes["vision"].ok):
-        print("  panels    : geometry only - run panel_split.py --no-ocr, "
-              "and expect no label cross-check")
     elif not probes["ocr"].ok:
-        print("  panels    : no OCR label check - the multimodal model has "
-              "to confirm each split by eye")
-    if not (probes["ocr"].ok or probes["vision"].ok):
-        print("  scanned   : NO - a scanned PDF cannot be read at all "
-              "(needs an OCR backend or a multimodal model)")
+        print("  panels    : keep whole figures; label cross-validation "
+              "requires RapidOCR")
+    if not probes["ocr"].ok:
+        print("  fallback  : if Acrobat export fails, request consent "
+              "to install RapidOCR before continuing")
     if not probes["converter"].ok:
         print("  figures   : positions are guessed by insert_figures.py "
               "(first mention), not taken from the source layout")
-    if not probes["vision"].ok:
-        print("  captions  : no visual pairing check - verify with the fitz "
-              "one-liner in SKILL.md step 5")
+    print("  Word review: skip after successful Acrobat export; required "
+          "after RapidOCR reconstruction")
+    print("  images    : embed in Markdown/PDF; do not ask to save a collection")
     return 0
 
 
@@ -360,28 +296,24 @@ def main() -> int:
 
     ap = argparse.ArgumentParser(
         description="Preflight the paper-translator environment.")
-    ap.add_argument("--multimodal", action="store_true",
-                    help="declare that the calling model can read images")
-    ap.add_argument("--allow-unverified", action="store_true",
-                    help="allow text-layer work without converter/OCR/vision; "
-                         "never makes scanned PDFs or panel splits verified")
     ap.add_argument("--json", action="store_true",
                     help="machine-readable report on stdout")
     args = ap.parse_args()
 
-    probes = collect(args.multimodal)
+    probes = collect()
     if args.json:
-        code = decide(probes, args.allow_unverified)
+        code = decide(probes)
         print(json.dumps({
             "interpreter": sys.executable,
             "probes": {k: asdict(v) for k, v in probes.items()},
             "figure_capabilities": [p.label for p in usable_caps(probes)],
+            "requires_rapidocr_install_consent": code == 4,
             "exit": code,
         }, indent=2, ensure_ascii=False))
         return code
 
     render(probes)
-    return verdict(probes, args.allow_unverified)
+    return verdict(probes)
 
 
 if __name__ == "__main__":

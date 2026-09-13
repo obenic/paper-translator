@@ -7,7 +7,7 @@ description: Use when the user asks to translate an academic paper, PDF, Word/.d
 
 把学术论文 PDF 译成中文，**图文完整**，同时产出 Markdown 与 PDF，最后连同原件收进以中文题目命名的文件夹。
 
-流程图见 [`docs/pipeline.drawio`](D:/skills/paper-translator/docs/pipeline.drawio)，预览/可编辑导出见 [`docs/pipeline.drawio.png`](D:/skills/paper-translator/docs/pipeline.drawio.png)。图是“阶段语义 + 用户决策”视图：框内不列具体 Python 脚本名，重点展示 Word 满意度、图片交叉验证选择、整图/面板分支，以及 6.1 归档后交付「中文题目」文件夹（2026-09-12 加入归档节点；2026-09-11 统一了节点尺寸、边框和颜色）。
+流程图见 [`docs/pipeline.drawio`](D:/skills/paper-translator/docs/pipeline.drawio)，预览/可编辑导出见 [`docs/pipeline.drawio.png`](D:/skills/paper-translator/docs/pipeline.drawio.png)。2026-09-13 更新：自检只接受 Acrobat Pro 和 RapidOCR；Acrobat 直转 Word 成功后不询问满意度，OCR 重建 Word 后必须询问；默认不保存独立图片合集。
 
 ## 铁律：论文 = 正文 + 图
 
@@ -29,12 +29,12 @@ PDF 里的图有三种形态，文本提取全都拿不到：
 
 **先把 `$SK` 指对，否则后面每条命令都会 `No such file`。** `$SK` 是本 skill 的**真实目录**——放着 `*.py` 的那个：
 
-```bash
-SK=~/.claude/skills/paper-translator                    # 常见位置（全局安装）
-ls "$SK"/*.py >/dev/null 2>&1 || echo "SK 不对：该目录没有脚本"
+```powershell
+$SK = 'D:\skills\paper-translator'
+Get-Item -LiteralPath "$SK\preflight.py"
 ```
 
-那一行检查不能跳。有些安装方式下 `~/.claude/skills/<name>/` 里**只有 `SKILL.md`**，是一个指向别处的注册桩；此时把 `$SK` 换成桩正文里写明的真实路径（例如本体放在别的盘）。PowerShell 用 `$env:USERPROFILE` 代替 `~`。
+那一行检查不能跳。`C:\Users\win10\.codex\skills\paper-translator\SKILL.md` 是注册入口，脚本和相对路径均按 D 盘真实目录解析。Windows 命令使用 PowerShell 7；下文 Bash 示例在 PowerShell 中需写为 `& $PY "$SK\脚本.py"`。
 
 **再把 `$PY` 指对，否则依赖装了也会报一串 MISSING。** `$PY` 是**装了本 skill 依赖的那个解释器**，未必是裸 `python`：
 
@@ -43,7 +43,7 @@ PY=python                                  # 多数情况够用
 echo "${VIRTUAL_ENV:-<none>}"              # 有值 = 当前在 venv 里，裸 python 就是 venv 那个
 ```
 
-`$VIRTUAL_ENV` 有值时**先别信裸 `python`**：venv 默认 `include-system-site-packages = false`，全局装的包它一个都看不到。这种机器上 1.0 会把三个能力一起报成 MISSING 并 exit 4——**跟「没装」是两码事，别照 exit 4 的指引让用户重装一遍**。列出候选解释器换一个：
+`$VIRTUAL_ENV` 有值时**先别信裸 `python`**：venv 默认 `include-system-site-packages = false`，全局装的包它一个都看不到。这种机器上 1.0 可能把两条路径都判为不可用并 exit 4。先排除解释器选错，不要让用户重复安装：
 
 ```bash
 py -0p                          # Windows：列出所有注册的解释器，带 * 的是当前
@@ -58,9 +58,9 @@ which -a python python3         # macOS / Linux
 |---|---|---|
 | **1.0** | 环境自检 `preflight.py` | 脚本 |
 | **2.0** | PDF → Word `pdf_to_docx.py` | 脚本 |
-| **2.1** | 从 Word 抽正文 + 图 `docx_extract.py` | 脚本 |
-| **2.2** | **决策点：问用户对 Word 是否满意，并询问是否交叉验证切割图片 ★** | 人工 |
-| **3.0** | 回退提取 `extract_paper.py`（仅 2.2 不满意，或本机无转换器时） | 脚本 |
+| **2.1** | Acrobat Word 抽正文和图；OCR Word 准备核对预览 | 脚本 |
+| **2.2** | **Acrobat 直转成功不问满意度；OCR 重建 Word 必须问。图片交叉验证单独选择** | 人工 |
+| **3.0** | 回退提取 `extract_paper.py`（OCR 路径补图，或自动检查发现转换缺失时） | 脚本 |
 | **4.0** | **按 2.2 的选择执行可选的面板切分与交叉验证** | 脚本 + 你数 `--layout` |
 | **5.0** | 翻译 | 模型 |
 | **5.1** | 写 Markdown | 模型 |
@@ -73,79 +73,75 @@ which -a python python3         # macOS / Linux
 
 ### 1.0 环境自检：先确认这台机器干得了这活
 
-**这是第一条命令，比转 Word 更早。** 你的机器不等于别人的机器——PDF→Word 转换、OCR、多模态识图是三件互不相干的事。前者负责提取正文和整图，后两者才负责扫描件读取或面板交叉验证；**不要把“能提取图”误当成“能验证切图”。**
+**这是第一条命令，比转 Word 更早。能力自检只检查 Acrobat Pro 和 RapidOCR。** 其他条目仅是运行依赖或 PDF 输出依赖，不能替代这两项放行。
 
 ```bash
-"$PY" "$SK/preflight.py"                 # 当前模型不能识图时这样跑
-"$PY" "$SK/preflight.py" --multimodal    # 你自己能读图就加这个
-# 用户选择跳过图片交叉验证、且已确认 PDF 有文本层时才允许：
-"$PY" "$SK/preflight.py" --allow-unverified
+"$PY" "$SK/preflight.py"
+"$PY" "$SK/preflight.py" --json
 ```
-
-**`--multimodal` 只能由你自己判断——脚本探测不到模型能力。** 你确实能读图（Read 工具吃 PNG）就加上；不确定就别加。虚报会让流程在最需要人眼的那一步失去唯一的兜底。
-
-三个能力各换来什么：
 
 | 能力 | 怎么检测的 | 有了它 | 没有它 |
 |---|---|---|---|
-| PDF→Word 转换器 | 注册表查 Acrobat / Word 的 COM 注册，Windows only | 图按原位嵌进正文，位置不用猜 | 退回 `insert_figures.py` 按「首次提及」猜位置 |
-| OCR | `ocr_engine.available()`：`rapidocr` 或 `paddleocr`+`paddle` 能否导入 | 读扫描件；由脚本读取 a/b/c 标签并校验面板切分，**纯文本模型也能使用** | `panel_split.py` 只能做几何/墨量等低置信度检查，不能声称标签语义已核对 |
-| 多模态识图 | 你自己声明 | 模型直接看切出的图片，确认边界、顺序和图注配对 | 不能做人工视觉复核；可由 OCR 脚本替代一部分 |
+| Acrobat Pro | Windows 安装路径、COM 注册和 pywin32；导出时再确认实际可用 | 优先直接将原 PDF 转 Word，抽取原位图文 | 使用 RapidOCR 重建 Word |
+| RapidOCR | `rapidocr`、`onnxruntime`、`cv2` 等运行依赖 | OCR 识别、重建可编辑 Word；校验面板标签 | Acrobat 仍可直转；面板标签交叉验证不可用 |
+
+仅安装 Word 或 PaddleOCR 不满足此门禁。Acrobat 路径需要 lxml；OCR 重建 Word 还需要 python-docx、Pillow 和 NumPy。
 
 **退出码：**
 
 | 码 | 含义 | 怎么办 |
 |---|---|---|
-| `0` | 至少一个能力可用 | 读 verdict 段落，它逐条写明本机降档在哪，照着调整后续步骤 |
+| `0` | Acrobat Pro 或 RapidOCR 至少一条路径可用 | 按实际可用路径继续；不能据此把未执行的检查写成已通过 |
 | `1` | 连 PyMuPDF 都没有 | `"$PY" -m pip install pymupdf` |
-| `4` | **没有可用的验证能力** | 扫描件或用户要求图片验证时必须补 OCR/多模态；只有确认是文字版且用户明确跳过验证，才用 `--allow-unverified` 重跑 |
+| `4` | **两条路径均不可用** | 核对解释器和依赖后，必须征得用户同意下载、安装 RapidOCR；未同意则停止 |
 
-**exit 4 先排除一件事：`$PY` 是不是指向了一个空的 venv。** 依赖装在全局、命令跑在 venv 里，三个能力会被一起报成 MISSING——此时让用户再装一遍 1GB 是白装。`echo "$VIRTUAL_ENV"` 有值就换解释器重跑一次（见「流程」开头 `$PY` 那段），别拿 venv 的报告当结论。
+**exit 4 先排除解释器或依赖选错。** 例如 Acrobat 已装但 lxml 缺失，应先补齐对应依赖并重跑，不把它误报成软件没装。
 
-**确实三个能力全无时，若要处理扫描件或执行图片交叉验证，正确处理是让用户装 [RapidOCR](https://github.com/RapidAI/RapidOCR) 或改用多模态模型。** 只有在确认输入是文字版 PDF、且用户明确选择跳过图片交叉验证时，才可用 `--allow-unverified` 继续。
+**确认 Acrobat 和 RapidOCR 都不可用时，必须暂停并明确询问：“是否同意下载并安装 RapidOCR 及运行依赖，以继续处理这篇文献？”** 说明首次运行可能下载 OCR 权重。只有用户明确同意后才执行安装；用户拒绝或尚未回答就停止。即使 PDF 有文本层、用户跳过图片验证，也不能绕过此要求。不提供跳过门禁的参数。
 
 ```bash
-# 约 40MB；实测整页 OCR 比 PaddleOCR 快 28 倍、精度打平
+# 仅在用户同意后执行，实际下载量取决于已有依赖和模型缓存
 "$PY" -m pip install --no-deps rapidocr
-"$PY" -m pip install onnxruntime shapely pyclipper omegaconf colorlog
+"$PY" -m pip install onnxruntime shapely pyclipper omegaconf colorlog numpy pillow requests tqdm six PyYAML python-docx
 ```
 
 **`--no-deps` 不能省。** `rapidocr` 声明依赖 `opencv_python`，而多数环境装的是
 `opencv-contrib-python`——两者争同一个 `cv2` 目录，直接装会互相覆盖。contrib 版提供的
-`cv2` 完全够用（实测换过去 6 页输出逐字一致、速度不变）。第二行里已装过的会被跳过。
+`cv2` 完全够用。只有确认 `cv2` 不存在时才另装 `opencv-python`，不要覆盖已有 OpenCV。
 
 它跑的**就是百度那套 PP-OCR 权重**（RapidOCR 把模型转成了 ONNX，版权仍归百度），
 所以这不是精度取舍。实测：6 张插图上同权重快 7.9 倍、用它更轻的默认档快 18.7 倍；
 一篇 9 页论文整页 OCR 快 28.5 倍，而召回率两边都是 99.3%。
 
-**不要再建议装 PaddleOCR。** `ocr_engine.py` 仍然支持它（机器上已有就自动能用，
-顺序是 RapidOCR → PaddleOCR），但慢一个数量级、大一个数量级（约 1GB）、精度不占优，
-新装没有理由选它。
+**不要建议改装其他 OCR。** 默认流程只用 RapidOCR；`ocr_engine.py` 中的其他后端仅为显式兼容调用保留，不参与自检放行。
 
-三者里 OCR 代价最小。为翻一篇论文现装 Acrobat Pro 不现实（体积、授权、时间都不划算），换多模态模型也不是人人说换就能换。
-
-**没有 OCR、模型也不能识图时，不代表文字版论文完全不能翻。** 如果 Word/文本层可用，且用户在 2.2 明确选择“跳过图片交叉验证”，可以保留整张图并继续；但必须如实标注“未做图片语义验证”。如果用户选择“进行交叉验证”，或输入是扫描件，则没有 OCR/多模态就必须停下，不能把 `--no-ocr` 的几何检查冒充完整验证，也不能根据文件名或常识猜图中文字。
+**只有 Acrobat、没有 RapidOCR 时**，可以直接转 Word 并保留整图。用户若要求面板标签交叉验证，必须先同意安装 RapidOCR；不能把 `--no-ocr` 几何检查冒充完整验证。Acrobat 实际导出失败、RapidOCR 又不可用时，同样暂停请求安装同意。
 
 **报告开头那行 interpreter 必须和你定的 `$PY` 是同一个。** 对不上，就是拿一个解释器查依赖、拿另一个跑脚本——一串 MISSING 多半出在这里，而不是真没装（见「流程」开头 `$PY` 那段）。
 
 ### 2.0 首选路径：先把 PDF 转成 Word
 
-**这是默认第一步，不是可选项。** PDF 转 Word 的转换器已经替你解决了本 skill 最难的两件事：图以图片形式嵌进去了，而且**落在正文里它原本该在的位置**。拿到这个就不用再做图区检测、也不用猜图该插哪，全省了。
+**这是默认第一步。** 优先使用 Acrobat 直接转换，保留正文与图的对应位置；失败或未安装时使用 RapidOCR 重建 Word。OCR 结果包含可编辑文本和内嵌原页预览，不宣称恢复了原文版式。
 
 **面板不再默认切。** 转换器给出的是一个图号一张文件（`media/fig02.jpg` = 整张 Fig 2），多面板图仍然是挤在一起的合成图；只有用户在 2.2 同意“交叉验证切割的图片”时，4.0 才把它切成面板并逐项验证。用户跳过时直接保留整张图。
 
-> Word 文档只是脚手架，**不是交付物**。最终只交付 Markdown + PDF；整图或已验证的面板会内嵌在 Markdown 中，PDF 再由 `md_to_pdf.py` 内嵌，不交付 `panels/`、`_figs/` 等切图合集。这两个文件最后由 6.1 连同原文 PDF 一起收进以中文题目命名的文件夹。
+> Word 文档只是脚手架，**不是交付物**。最终只交付 Markdown + PDF；整图或已验证的面板会内嵌在 Markdown 中，PDF 再由 `md_to_pdf.py` 内嵌。**不要询问是否保存图片合集，默认不保存独立图集。** 处理所需图片只放任务工作目录，不交付 `panels/`、`_figs/` 等目录；只有用户主动明确要求图集才另行处理。
 
 **已经有 `.docx` 原件时**（用户直接给 Word 版论文，或自己导出过），跳过本步，直接从 2.1 开始——`docx_extract.py` 吃任意 `.docx`。
 
 ```bash
-"$PY" "$SK/pdf_to_docx.py" "<pdf>"          # auto：先 Acrobat，失败退 Word
+"$PY" "$SK/pdf_to_docx.py" "<pdf>" -o "<tmp_dir>/source.docx"  # Acrobat -> RapidOCR
+"$PY" "$SK/pdf_to_docx.py" "<pdf>" -o "<tmp_dir>/ocr.docx" --engine rapidocr
 "$PY" "$SK/pdf_to_docx.py" --check          # 看本机准备好了没
 ```
 
+转换成功会生成同名 `<stem>.conversion.json`，包含 `engine` 和 `requires_word_review`。**必须读取实际结果**：`acrobat` + `false` 直接继续，不问满意度；`rapidocr` + `true` 进入 2.2 询问。仅仅“本机有 Acrobat”不是跳过确认的依据。输出路径已存在时脚本拒绝覆盖，换到已核对的空工作路径。
+
+Acrobat 的 COM 导出在独立进程中执行，默认最多等待 180 秒；可用 `--acrobat-timeout` 调整。失败或超时后恢复保护模式，再回退 RapidOCR。超时清理只针对本次导出新建的 Acrobat 进程；不能把接口返回 `ok` 但未生成有效 DOCX 当作成功。
+
 **Acrobat Pro 导出现在是全自动的，不需要让用户手动点菜单。** 唯一的人工动作是**首次运行时批准一次 UAC 弹窗**（要把受信任脚本写进 Acrobat 安装目录），批准后永久生效，之后每次导出零交互。脚本自己判断装没装，已装就不再弹。
 
-弹窗出现时提醒用户点「是」。用户拒绝或不在场时，走 `--engine word` 兜底。
+弹窗出现时提醒用户点「是」。用户拒绝或不在场时，仅在 RapidOCR 已可用时回退；缺少 RapidOCR 必须按 1.0 请求安装同意。
 
 **不要以管理员身份运行 Acrobat 或本脚本。** 只有那一次文件复制需要提权，Acrobat 和 Python 都以普通用户运行——提权进程与普通进程之间的 COM 连接会被 Windows 的完整性级别隔离挡掉。
 
@@ -166,9 +162,11 @@ which -a python python3         # macOS / Linux
 
 只有需要视觉保真时才用 `page`。本 skill 的交付物是重新排版的 Markdown + PDF，不需要保真。
 
-**Word COM 是自动兜底，质量差一档**：实测把双栏正文打散进 58 个文本框，还切在词中间（`ScienceDirec` + `t`）。能用，但译文可能不连贯。
+**转换引擎只有 Acrobat 和 RapidOCR，不调用 Microsoft Word。** Word/DOCX 只是中间文件格式；Acrobat 不可用或转换失败后，只能进入 RapidOCR 路径。
 
 ### 2.1 从 Word 抽正文 + 图 + 图的位置
+
+本步的 `docx_extract.py` 用于 Acrobat 直转结果或用户提供的普通 Word 原件。**RapidOCR 重建的 Word 含整页核对预览，不能把每页预览当成一张论文插图来配号。** OCR 路径先展示 Word、识别文本片段及字符统计，在 2.2 获得满意度确认后，再用 3.0 补齐原 PDF 的插图与图注。
 
 ```bash
 "$PY" "$SK/docx_extract.py" "<docx>"
@@ -184,7 +182,7 @@ which -a python python3         # macOS / Linux
 | 出版商 logo 被当成图 1、图 2，真图全体错位 | 两条判据一起用：**尺寸**滤掉远小于中位数的小徽标（Elsevier logo 只有 248×271，真图 ≥ 950），**形状**滤掉第一条图注之前的宽横幅（长宽比 ≥ 3）。第二条是必需的——实测一篇 Wiley 论文的 `ADVANCED SCIENCE NEWS` 横幅是 2933×676，全篇**最大**的一张图，尺寸判据完全挡不住，它抢走图 1 让后面每张图错位一号。两条必须同时成立才判为装饰：只看位置会连真的第一张图一起误杀（同一篇里它也排在第一条图注之前） |
 | 图和它自己的图注在 XML 里离得很远 | Word 把浮动图锚在附近任意一段上，所以**按顺序配对**图与图注，不按距离 |
 | 某张图的图注被粘在正文段落尾部，没成为独立段落 | 该图号从图注清单里消失，按图注清单配号会让它**之后所有图整体错位一号**（图 4 的图片被命名成 fig05）。图注数与图数不等时，改用正文引用到的图号列表配号 |
-| 作者行、`Keywords:`、DOI、公式碎片被当成章节标题 | 标题不再靠「短且不以句号结尾」猜，而是读 Word 自己的 `Heading1..9` 样式。Acrobat flowing 导出会把真章节标上样式（实测 7 页论文正好 9 个，一个不多）。只有当整篇没有任何标题样式时（Word COM 兜底常这样）才退回长度猜 |
+| 作者行、`Keywords:`、DOI、公式碎片被当成章节标题 | 标题不再靠「短且不以句号结尾」猜，而是读 DOCX 的 `Heading1..9` 样式。Acrobat flowing 导出会把真章节标上样式（实测 7 页论文正好 9 个，一个不多）。只有当整篇没有任何标题样式时才退回长度猜 |
 
 脚本对图做**三方交叉校验**——图注、图片、正文引用必须互相对得上，任何一条不符就 exit 3：
 
@@ -198,31 +196,22 @@ which -a python python3         # macOS / Linux
 
 `content.md` 里 `<!-- 不翻译 -->` 标记的段落是参考文献/致谢/声明那些，翻译时跳过。
 
-### 2.2 决策点：问用户满不满意 + 是否交叉验证切图 ★
+### 2.2 按实际来源决定是否询问 Word 满意度
 
-**抽完必须停下来问，不许自己替用户决定。** PDF 转 Word 会失真——原件带水印、扫描件、特殊字体、公式排版复杂时，可能出现乱码、错字、缺字、段落错乱。
-
-给用户看：`content.md` 的前几段 + `manifest.json` 里的字数/图数，并在同一条消息里明确问两个问题：
-
-1. Word 提取结果是否满意？
-2. 是否要对多面板图执行“切割 + 交叉验证”？说明这会增加处理时间；跳过则保留整张图，不做面板语义核验。
-
-把能力边界说清楚：
-
-- **有 OCR 的纯文本模型**可以选择验证：`panel_split.py` 由 OCR 读取面板标签和文字框，模型不需要直接看图。
-- **有多模态能力**时可以在脚本校验后再人工看图，确认边界、顺序和图注配对。
-- **纯文本模型且没有 OCR**时不能声称完成图片交叉验证；只能选择跳过，或先安装 RapidOCR/改用多模态模型。
-
-| 用户回答 | 走哪条路 |
+| 实际来源或用户回答 | 走哪条路 |
 |---|---|
-| **Word 满意** | 直接翻译 `content.md`，跳过 3.0 |
-| **Word 不满意** | 走 3.0（`extract_paper.py` + `--ocr` 或多模态识图），Word 那份丢弃 |
+| **Acrobat 直转成功** | 不询问 Word 满意度。自动检查通过后直接使用 `content.md`；有缺图、乱码或图注告警则自行修复、重新核验，不以满意度反问代替检查 |
+| **RapidOCR 识别后重建 Word** | 必须提供 Word 路径、文本片段和统计，并问“这份 OCR 识别后生成的 Word 是否满意？”；说明公式、上下标、符号可能识别错误。等待回答，不代替用户同意 |
+| **OCR Word 满意** | 采用已认可的识别正文，3.0 补齐原 PDF 的图与图注，再继续翻译 |
+| **OCR Word 不满意** | 根据具体问题调整语种、DPI 或修复识别结果，重新生成 Word 后再次询问；不能把不满意当成继续翻译的许可 |
 | **跳过图片交叉验证** | 不执行 4.0，保留每张整图，后续把整图放到正文第一次提及处 |
-| **进行图片交叉验证** | 执行 4.0；有 OCR 时跑脚本校验，有多模态时再逐张视觉复核；任一能力都没有则停止并说明原因 |
+| **进行图片交叉验证** | 执行 4.0，用 RapidOCR 读取标签和文字框并校验；缺少 RapidOCR 时先请求安装同意 |
 
-问的时候把具体风险说出来（「有水印/公式多的原件容易出错字」「切图可检查面板是否合并或缺失」），不要只问一句「行不行」。
+**图片交叉验证是独立选择，不是保存图集。** 存在多面板图且用户尚未选择时，仅询问是否执行“切割 + 交叉验证”，并说明额外耗时；跳过则保留整图。Acrobat 路径不得顺便夹带“Word 满意吗”。没有多面板图时无需询问切分。
 
-### 3.0 提取（回退路径：Word 转换不满意时才走）
+**任何路径都不要询问是否保存图片合集，默认不保存。** 用户已明确给过的选择不重复询问。
+
+### 3.0 提取（OCR 路径补图或转换检查失败时回退）
 
 脚本位置见「流程」开头的 `$SK`。
 
@@ -232,20 +221,14 @@ which -a python python3         # macOS / Linux
 
 **扫描件处理：**
 
-脚本自动检测有无文本层。检测到扫描件（`text_pages: 0`）时两条路，选一条——**走哪条不用现场判断，1.0 的报告已经查清这台机器有没有 OCR，你也已经声明过能不能识图**：
-
-| 方式 | 命令 | 前提 |
-|---|---|---|
-| **OCR 提取** | 加 `--ocr` | 已装 RapidOCR |
-| **视觉识图** | 不加参数 | 当前模型能识图 |
+脚本自动检测有无文本层。检测到扫描件时必须使用 RapidOCR，不能把页面渲染成功当成识别成功。缺少 RapidOCR 时回到 1.0 请求安装同意。
 
 ```bash
 "$PY" "$SK/extract_paper.py" "<pdf>" -o "<tmp_dir>" --ocr
 # 中英混排原件加 --ocr-lang ch；识别率低加 --dpi 300
 ```
 
-**后端不用你选。** `ocr_engine.py` 自己按 RapidOCR → PaddleOCR 的顺序挑，
-摘要里的 `OCR` 那行和 `manifest.json` 的 `ocr_backend` 会写明实际用了哪个。
+此路径固定使用 RapidOCR，摘要里的 `OCR` 行和 `manifest.json` 的 `ocr_backend` 会记录实际后端。
 
 `--ocr` 对文字型 PDF 会自动忽略（文本层本来就比 OCR 准），加了不会白跑。
 
@@ -255,13 +238,9 @@ which -a python python3         # macOS / Linux
 - `0` — 图数量一致，继续
 - `3` — **图可能漏了**。查 `manifest.json` 的 `per_page` 定位缺失页，用 `--pages 5,12-14` 强制渲染，直到一致
 - `1` — 报错（缺 PyMuPDF → `"$PY" -m pip install pymupdf`；缺 OCR → 按 1.0 那段装 RapidOCR）
+- `4` — 扫描件未启用 OCR；确认 RapidOCR 可用后加 `--ocr` 重跑，缺少时先请求安装同意
 
-摘要里 `SCANNED` 表示全篇无文本层。此时：
-
-- **用了 `--ocr`**：`text.txt` 已是 OCR 结果，照常翻译，但**要提醒用户 OCR 可能认错字**，公式和符号尤其要核对
-- **没用 `--ocr`**：`figures/` 就是全部页面，用 Read 工具逐张视觉识别后翻译
-
-**若当前模型不具备识图能力，且未启用 `--ocr`**，扫描件到此为止：如实告诉用户「本模型无法读取扫描件内容」，让用户改用 `--ocr`、换多模态模型，或提供文字版 PDF。**绝不允许根据文件名、页数或常识推测论文内容**——编造的译文比没有译文危害大得多。
+摘要里的 `SCANNED` 表示原件没有文本层。未启用 `--ocr` 时停止并按上面的命令重跑。OCR 正文必须与用户已确认的 Word 一致；再次识别产生实质性变化时重新确认，不能偷偷替换已确认文本。**绝不根据文件名、页数或常识推测论文内容。**
 
 ### 4.0 可选：切分面板并交叉验证
 
@@ -274,13 +253,13 @@ which -a python python3         # macOS / Linux
 "$PY" "$SK/panel_split.py" "<out>/media/fig02.jpg"     -o "<out>/panels"  --layout 4,3,4,3,1 --expect a-o   # Word 路径
 ```
 
-**`--layout` 是每行几个面板，必须自己看图数出来。** 这一步不能省：面板之间的行间距可以只有 4 px，而面板*内部*（图和刻度标签之间）的空白能有 30 px，纯靠像素分不出哪条是边界。你看一眼就知道的事，算法猜不到。
+**`--layout` 是每行几个面板，须结合 OCR 标签坐标、图注和原图布局核对。** 面板行间距可能只有 4 px，而面板内部的空白能有 30 px，不能单靠最大空白猜边界。
 
 **`--expect` 是图注列出的面板字母**（`a-o` 或 `a,b,c`），几乎白捡的一重校验：图注就在 `content.md` 里，照着抄一遍即可。带上它，切出来的张数和图注声称的对不上就会 exit 3——**不带就没有这一重**。
 
 不给 `--layout` 也能跑（自动模式），但它经常数错个数——**数错时脚本会明说并 exit 3，不会假装成功**。自动模式只适合先看看图长什么样。
 
-脚本在有 OCR 时做四重校验，任何一条不过就 exit 3；传了 `--expect` 再加第五重。**这就是纯文本模型可用的验证路径：验证由脚本中的 OCR 和几何规则完成，不要求模型本身具备视觉输入。**
+脚本使用 RapidOCR 和几何规则校验；传入 `--expect` 后还核对图注清单。任何一条不过就 exit 3，必须查清原因。
 
 | 校验 | 抓的是什么 |
 |---|---|
@@ -462,7 +441,7 @@ pandoc → 自包含 HTML（图片转 data URI）→ Chrome/Edge 无头打印。
 | `<原文标题> 中文翻译.md` | 5.4 | 图片已内嵌，自包含 |
 | `<原文标题> 中文翻译.pdf` | 6.0 | 图片已内嵌，可单独发送 |
 
-**不放图集。** 图已经在 md 和 PDF 里，而且是 4.0 验证过的那批、落在原文对应的位置（5.2 归位、5.4 内嵌、6.0 校验张数）；单独再放一份 `_figs/` 只是多出一个要维护的副本。文件名照 5.1 用原文标题，只有文件夹名用中文。
+**不询问保存图集，默认不放图集。** 图已内嵌在 md 和 PDF 里：选择验证时使用通过检查的面板，跳过时使用整图；不得把未执行的面板验证写成已完成。文件名照 5.1 用原文标题，只有文件夹名用中文。
 
 **不进文件夹、归档确认后删掉的**：2.0 的 `.docx`、2.1 的 `<stem>_docx/`（含 `media/`、`content.md`、`manifest.json`）、3.0 的提取目录、4.0 的 `panels/`、5.1 的 `_figs/`、各步留下的 `.bak`、翻译草稿。它们都能由脚本重新生成，留着只会让文件夹里分不清哪份是成品——实测一个手工整理的文件夹里同时躺着两份原 PDF、`.docx`、`_docx/`、`native_extract/`、`translation_draft.md` 和 `.md.bak`。**2.0 和 2.1 默认把 `.docx` 和 `<stem>_docx/` 直接生成在原 PDF 旁边**，不清就一直留在用户的文献目录里。
 
@@ -482,8 +461,10 @@ pandoc → 自包含 HTML（图片转 data URI）→ Chrome/Edge 无头打印。
 声称完成前逐条确认，不能凭印象：
 
 - [ ] **1.0 环境自检跑过**（`preflight.py` 退出码 0；exit 4 没解决就不该走到这一步）
-- [ ] **2.2 两个问题都问过用户**（Word 是否满意；是否进行图片交叉验证）
-- [ ] 3.0 提取脚本退出码 0（或告警已查证解决）
+- [ ] **确认实际转换来源**：Acrobat 成功直转时未问 Word 满意度；RapidOCR 重建 Word 时已展示结果、询问并获得用户满意的答复
+- [ ] **没有询问保存图片合集**，默认不生成独立交付图集
+- [ ] 存在多面板图时已按用户的图片交叉验证选择执行，未与 Word 满意度或图集保存混淆
+- [ ] 3.0 如有执行，退出码 0（或告警已查证解决）
 - [ ] **4.0 按用户选择执行**：选择验证时退出码 0（或退出码 3 已逐条查证）；选择跳过时确认保留整图且没有运行面板切分
 - [ ] **5.2 插图归位的退出码 0**（每张图都找到了正文提及）
 - [ ] **5.3 目录已加**（md 里有 `<!-- TOC -->` 块；PDF 第一页标题下方有目录页）
@@ -513,12 +494,12 @@ pandoc → 自包含 HTML（图片转 data URI）→ Chrome/Edge 无头打印。
 
 | 问题 | 解决 |
 |------|------|
-| `preflight.py` 报 exit 4 | **先确认 `$PY` 不是空 venv**（`echo "$VIRTUAL_ENV"`，见下一条）。确实没有可用转换器、OCR 或多模态能力时，扫描件和图片交叉验证都不能做；要验证就安装 [RapidOCR](https://github.com/RapidAI/RapidOCR)（`--no-deps rapidocr` + `onnxruntime shapely pyclipper omegaconf colorlog`，约 40MB）或改用多模态模型。若报告是 exit 0 但写明 `geometry only`，文字版论文可以在用户明确同意后跳过图片交叉验证 |
+| `preflight.py` 报 exit 4 | 先核对解释器和缺失依赖；确认 Acrobat、RapidOCR 均不可用后，必须请求用户同意下载、安装 RapidOCR，未同意则停止；文字版 PDF 也不能绕过 |
 | `preflight.py` 说某个包 MISSING，但明明装过 | 跑的解释器不是装包那个。看报告开头的 interpreter 行，按「流程」开头那段重新定 `$PY`——有已激活的 venv 时裸 `python` 一定是 venv 那个，而 venv 默认看不见全局包 |
 | 转换器显示 ok，verdict 里却判 UNUSABLE | 缺 lxml。`docx_extract.py` 靠它解析 .docx，`"$PY" -m pip install lxml` 即解 |
-| Acrobat 导出挂住不返回 | Protected Mode 又被打开了（Acrobat 更新会重置它）。`--check` 看它的值。若 `HKLM\...\FeatureLockDown` 有组策略锁定，脚本关不掉，只能改用 `--engine word` |
+| Acrobat 导出挂住不返回 | 独立导出进程默认 180 秒超时后回退 RapidOCR；大文件可调整 `--acrobat-timeout`。`--check` 核对 Protected Mode；若组策略锁定，不修改组策略；缺 RapidOCR 时先征得安装同意 |
 | 报「folder script not loaded」 | 装脚本时 Acrobat 没完全退出。全部关掉再跑 `--install-acrobat-js` |
-| UAC 被拒绝，或用户不在场 | `--engine word` 兜底；或让用户手动导出（Settings → Layout Settings → Retain Flowing Text） |
+| UAC 被拒绝，或用户不在场 | 仅在 RapidOCR 已可用时回退；否则停止并等待安装同意，不自动下载 |
 | 导出的正文句子顺序错乱 | 用成了 `--layout page`，改回默认 flowing |
 | `docx_extract.py` 报「no figure caption was extracted at all」 | 转换器把整篇图注都并进了正文。改用 `--layout page` 重导一次，或走 3.0 |
 | 报「the text refers to Fig [N], which no extracted caption covers」 | 那条图注被粘在某个正文段落尾部。`Grep` 搜 `Fig. N` 找到碎片，拼回完整图注再翻译。图片编号脚本已自动修正，无需手改 |
@@ -534,7 +515,7 @@ pandoc → 自包含 HTML（图片转 data URI）→ Chrome/Edge 无头打印。
 | 切出来多了一块页眉 | 正常，脚本按「在首个面板标签之上」判为页面装饰并排除，不计入墨量守恒 |
 | OCR 读不出 i / l / o | 常态，note 里会写明；靠其余标签一致性背书，不算失败 |
 | 装了 rapidocr 之后 cv2 出问题 / 别的项目报 opencv 错 | 装的时候漏了 `--no-deps`，pip 把 `opencv_python` 装进来跟 `opencv-contrib-python` 争同一个 `cv2` 目录。卸掉 `opencv_python`、重装 contrib 版即可，rapidocr 用 contrib 那份完全正常 |
-| 想知道这次到底用了哪个 OCR 后端 | `manifest.json` 的 `ocr_backend`、`<figNN>_panels.json` 的 `ocr_backend`，或直接 `"$PY" "$SK/ocr_engine.py" <图片>` 把两个后端各跑一遍对比 |
+| 想知道这次 Word 是否需要确认 | 查看同名 `.conversion.json`：`engine=acrobat` 且转换成功时不问满意度；`engine=rapidocr` 时必须问。OCR 实际后端也记在提取或面板清单的 `ocr_backend` |
 | 面板之间根本没有空白 | 并排的 force plot 一类。别硬切，退回整张图，并在交付说明里写明该图未完成面板验证 |
 | `inline_images.py` 报缺失图片或远程图片 | 检查 5.1 中的临时路径是否相对 `<译文.md>` 正确；最终交付要求所有图片都是本地资源，不能依赖远程 URL。修复后重新运行 5.4，不要先删除临时图片目录 |
 | 归位报「NO MENTION FOUND」 | 译文里没有「图 N」字样。查是漏译了引用句，还是原文写的「见下图」这种；补上引用再跑 |
@@ -550,7 +531,7 @@ pandoc → 自包含 HTML（图片转 data URI）→ Chrome/Edge 无头打印。
 | 6.0 报 `outline: NONE` | 浏览器不认 `--generate-pdf-document-outline`（旧版 Chrome/Edge）。目录页仍在，但没有书签树；换 Chrome 或升级 |
 | 目录页占了一整页太浪费 | 设计如此：标题页 + 目录一页，正文从下一页起。不想要就 `--no-toc` |
 | 扫描件字迹模糊 | `--dpi 300` |
-| 提取文本断行严重 | 用 Read 工具直接读 PDF（`pages` 参数）交叉核对 |
+| 提取文本断行严重 | 用 PyMuPDF 提取对应页的文本块和坐标，并与原页核对 |
 | 归档时目标文件夹已存在 | 多半是同一篇翻过一次。停下来列出里面有什么再问用户：覆盖译文、换名，还是不归档；不自作主张覆盖、删除或另起带序号的文件夹 |
 | 中文题目里带 `:` `?` `/` 这类字符，建文件夹报错 | Windows 不许这些字符出现在路径里，换成全角同形字符（`：` `？` `／`），见 6.1 |
 | 归档后原文 PDF 还留在外面 | 移动失败（被阅读器占用、跨盘）。关掉阅读器重试，或让用户手动移；不要复制一份进去了事 |

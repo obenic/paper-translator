@@ -11,7 +11,8 @@ done two things that are expensive to do from the PDF directly:
 
 The DOCX is scaffolding, not the deliverable. What comes out of here is an
 ordered stream of paragraphs and figure anchors that a translation is written
-against; the final output is still Markdown + PDF + a figures folder.
+against; the final output is Markdown + PDF with images embedded, not a
+separate figures collection.
 
 Text inside floating text boxes counts. Word's PDF importer puts most running
 text in them and splits words across boxes ("ScienceDirec" + "t"), so
@@ -195,8 +196,8 @@ def classify(stream):
     mistranslating a reference list is worse than leaving it in English.
 
     Headings come from Word's own styles when the converter set any (see
-    heading_level). Only when the document carries no heading styles at all -
-    the Word COM fallback often does not - does the length guess take over,
+    heading_level). Only when the document carries no heading styles at all
+    does the length guess take over,
     and that guess is why a paragraph like "Because ODMR contrast originates
     only from the NV- spin-" used to become a section heading.
     """
@@ -498,7 +499,5 @@ def main():
 
 if __name__ == "__main__":
     sys.exit(main())
-
-
 
 

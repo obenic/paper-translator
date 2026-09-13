@@ -16,9 +16,8 @@ perfectly fine on its own. So every crop is checked four ways:
     3. ink conservation - the crops together hold ~all the ink of the figure
     4. text conservation- every OCR text box of the figure falls inside a crop
 
-Checks 1 and 4 need OCR (RapidOCR preferred, PaddleOCR fallback). Without it,
-2 and 3 still run and the
-result is reported as low-confidence rather than silently trusted.
+Checks 1 and 4 need RapidOCR. Without it, 2 and 3 still run and the result is
+reported as low-confidence rather than silently trusted.
 
 Panel labels are the ground truth for how many panels exist. Cut lines are
 then placed at the minimum-ink seam between adjacent labels, which lands in
@@ -135,10 +134,7 @@ def run_ocr(rgb, lang="en"):
     assigns these boxes to crops geometrically, which is both faster and
     consistent (re-OCR of a crop can read different text than the whole).
 
-    Backend comes from ocr_engine.py - RapidOCR first, PaddleOCR as fallback.
-    RapidOCR's lighter default matched PaddleOCR on the panel labels across
-    all 6 test figures while starting ~7x faster, which is what this call
-    actually depends on.
+    RapidOCR is selected explicitly to match the preflight capability gate.
     """
     sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
     try:
@@ -146,7 +142,8 @@ def run_ocr(rgb, lang="en"):
     except ImportError:
         return None, "ocr_engine.py must sit next to panel_split.py"
 
-    engine, backend, note = ocr_engine.make_engine(lang=lang)
+    engine, backend, note = ocr_engine.make_engine(
+        lang=lang, prefer=ocr_engine.BACKEND_RAPID)
     if engine is None:
         return None, note
     try:
@@ -156,7 +153,7 @@ def run_ocr(rgb, lang="en"):
 
     # Which backend ran is diagnostic, not a problem: the caller appends any
     # note to `problems`, which drives the exit code, so a successful run -
-    # including one that fell back to PaddleOCR - must report no note at all.
+    # must report no error note at all.
     global _OCR_BACKEND
     _OCR_BACKEND = backend + (f" ({note})" if note else "")
 
@@ -493,10 +490,9 @@ def _pad_cuts(cuts, need, lo, hi):
 def boxes_from_layout(mask, layout, labels, pad=PANEL_PAD, names=None):
     """Split into exactly the panels a caller says are there: [4,3,4,3,1].
 
-    Panels-per-row is the one thing about a figure that is instantly obvious
-    to a human or a vision model and impossible to infer reliably from pixels
-    (Fig 2's row gutters are 4-27 px, overlapping the gutters *inside* its
-    panels). Given it, the cut positions follow deterministically.
+    Panels-per-row must be checked against labels and captions, not guessed
+    from whitespace alone: row gutters can overlap the sizes of gaps inside
+    a panel. Given the layout, cut positions follow deterministically.
 
     Returns (boxes, warnings).
     """
@@ -1012,8 +1008,6 @@ def main():
 
 if __name__ == "__main__":
     sys.exit(main())
-
-
 
 
 

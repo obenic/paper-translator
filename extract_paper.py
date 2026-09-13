@@ -22,12 +22,10 @@ Figure detection covers three cases the text layer misses:
                                  drawing operations instead)
 
 Scanned PDFs (no text layer):
-    --ocr           OCR rendered pages. Backend picked by ocr_engine.py:
-                    RapidOCR first, PaddleOCR as fallback.
+    --ocr           OCR rendered pages with RapidOCR.
                     Requires: pip install --no-deps rapidocr
                               pip install onnxruntime shapely pyclipper omegaconf colorlog
-                    Without this flag, scanned PDFs produce empty text.txt
-                    and you must rely on multimodal model vision.
+                    Without this flag, scanned PDFs stop with exit 4.
 
 Completeness check: the body text is scanned for figure references
 ("Fig. 3", "Figure 3"). If the paper references N figures, N figures
@@ -38,6 +36,7 @@ resolve it by looking rather than by trusting the number.
 Exit codes:
     0  extracted, figure count consistent
     3  extracted, but figure count looks wrong - INSPECT BEFORE TRANSLATING
+    4  scanned PDF requires --ocr and RapidOCR
     1  error
 """
 
@@ -116,10 +115,7 @@ def parse_pages(spec, n_pages):
 def make_ocr_engine(lang):
     """Build an OCR engine, or return (None, None) with an actionable message.
 
-    Backend choice lives in ocr_engine.py: RapidOCR first, PaddleOCR as
-    fallback. Both run the same PP-OCR weights, so this is not an accuracy
-    trade - RapidOCR is just far cheaper to start and to run (measured 7.9x
-    faster on identical weights, 18.7x on its lighter default).
+    This path uses RapidOCR only, matching the preflight gate.
 
     Returns (engine, backend_name) so the summary can report which one ran.
     """
@@ -131,7 +127,8 @@ def make_ocr_engine(lang):
               file=sys.stderr)
         return None, None
 
-    engine, backend, note = ocr_engine.make_engine(lang=lang)
+    engine, backend, note = ocr_engine.make_engine(
+        lang=lang, prefer=ocr_engine.BACKEND_RAPID)
     if engine is None:
         print(f"ERROR: {note}", file=sys.stderr)
         return None, None
@@ -254,15 +251,6 @@ def caption_panel_letters(text):
     return [], "none"
 
 
-def _line_offsets(raw):
-    """(char offset, line) for every line in a text block."""
-    out, pos = [], 0
-    for line in raw.splitlines():
-        out.append((pos, line))
-        pos += len(line) + 1
-    return out
-
-
 def figure_captions(doc):
     """Every figure caption in the document: [{num, page, rect, text, panels}].
 
@@ -275,35 +263,55 @@ def figure_captions(doc):
     found = []
     for pno, page in enumerate(doc, start=1):
         try:
-            blocks = page.get_text("blocks")
+            blocks = page.get_text("dict")["blocks"]
         except Exception:
             continue
+        lines = []
         for b in blocks:
-            if len(b) < 5 or not isinstance(b[4], str):
+            for line in b.get("lines", []):
+                spans = line["spans"]
+                text = " ".join("".join(s["text"] for s in spans).split())
+                if text:
+                    lines.append((fitz.Rect(line["bbox"]), text,
+                                  max(s["size"] for s in spans
+                                      if s["text"].strip())))
+        lines.sort(key=lambda item: (item[0].y0, item[0].x0))
+        for index, (rect, text, size) in enumerate(lines):
+            if re.match(r"^\**\s*(Supplementary|Extended)", text, re.I):
                 continue
-            raw = b[4]
-            # Match at the start of any line, not just the start of the block.
-            # PyMuPDF often glues a caption onto the paragraph above it, and
-            # Nature-style captions run across a page break, so a block-anchored
-            # test misses them entirely.
-            for offset, line in _line_offsets(raw):
-                text = " ".join(line.split())
-                if re.match(r"^\**\s*(Supplementary|Extended)", text, re.I):
+            match = CAPTION_START_RE.match(text)
+            if not match:
+                continue
+            parts, bounds, previous = [text], fitz.Rect(rect), rect
+            # A PDF may store every caption line in a separate block, or put
+            # text from both columns in one block. Join physical lines using
+            # column alignment, line spacing and font size instead.
+            for next_rect, next_text, next_size in lines[index + 1:]:
+                if abs(next_rect.x0 - rect.x0) > 2 * size:
                     continue
-                m = CAPTION_START_RE.match(text)
-                if not m:
-                    continue
-                tail = " ".join(raw[offset:].split())
-                panels, how = caption_panel_letters(tail)
-                found.append({
-                    "num": int(m.group(1)),
-                    "page": pno,
-                    "rect": fitz.Rect(b[:4]),
-                    "text": tail[:1200],
-                    "panels": panels,
-                    "panels_from": how,
-                })
-                break
+                gap = next_rect.y0 - previous.y1
+                if (gap < -0.25 * previous.height
+                        or gap > 0.85 * previous.height
+                        or abs(next_size - size) > 0.75
+                        or CAPTION_START_RE.match(next_text)
+                        or re.match(
+                            r"^(?:\d+(?:\.\d+)*\.?\s+[A-Z]|"
+                            r"(?:Table|Supplementary|Extended\s+Data|References)\b)",
+                            next_text)):
+                    break
+                parts.append(next_text)
+                bounds |= next_rect
+                previous = next_rect
+            tail = " ".join(parts)
+            panels, how = caption_panel_letters(tail)
+            found.append({
+                "num": int(match.group(1)),
+                "page": pno,
+                "rect": bounds,
+                "text": tail,
+                "panels": panels,
+                "panels_from": how,
+            })
     found.sort(key=lambda c: (c["num"], c["page"], c["rect"].y0))
     seen, unique = set(), []
     for c in found:
@@ -368,13 +376,30 @@ def figure_regions(page, min_area_frac=0.02, gap=12, max_label_chars=40):
     rects = []
     try:
         for info in page.get_image_info():
-            rects.append(fitz.Rect(info["bbox"]))
+            r = fitz.Rect(info["bbox"])
+            # Small wide images confined to the page header are publisher
+            # logos; merging them with a nearby plot expands its crop.
+            if (r.y1 <= page.rect.y0 + 0.1 * page.rect.height
+                    and r.width >= 3 * r.height
+                    and r.width * r.height < min_area_frac * page_area):
+                continue
+            rects.append(r)
     except Exception:
         pass
     try:
         for drawing in page.get_drawings():
             r = fitz.Rect(drawing["rect"])
-            if r.width > 4 and r.height > 4:
+            # Tiny scatter marks and zero-width/height axis lines still
+            # belong to the artwork. Filter by the final cluster area, not
+            # by each path's dimensions.
+            if r.width >= 0 and r.height >= 0 and (r.width or r.height):
+                pad = max((drawing.get("width") or 0) / 2, 0.5)
+                if r.width == 0:
+                    r.x0 -= pad
+                    r.x1 += pad
+                if r.height == 0:
+                    r.y0 -= pad
+                    r.y1 += pad
                 rects.append(r)
     except Exception:
         pass
@@ -402,7 +427,10 @@ def figure_regions(page, min_area_frac=0.02, gap=12, max_label_chars=40):
             continue
         near = cluster + (-2 * gap, -2 * gap, 2 * gap, 2 * gap)
         for rect, text in blocks:
-            if len(text.strip()) > max_label_chars:
+            if not text.strip() or len(text.strip()) > max_label_chars:
+                continue
+            if (CAPTION_START_RE.match(text.strip())
+                    or re.search(r"[.!?]\s*\[[\d,\s-]+\]\s*$", text.strip())):
                 continue
             # Mostly inside, not merely touching. On page 6 of the ODMR paper
             # the heading "4. Conclusions" in the far column clips the corner
@@ -430,8 +458,7 @@ def main():
                     help="cap rendered width in px, keeps files embeddable")
     ap.add_argument("--pages", help="render these pages regardless (e.g. 21-24)")
     ap.add_argument("--ocr", action="store_true",
-                    help="OCR scanned pages (RapidOCR preferred, "
-                         "PaddleOCR fallback - see ocr_engine.py)")
+                    help="OCR scanned pages with RapidOCR")
     ap.add_argument("--ocr-lang", default="en",
                     help="OCR language: en, ch, japan, korean, ... "
                          "(default: en; use ch for Chinese-English mixed)")
@@ -463,6 +490,13 @@ def main():
     pages = [analyze(p) for p in doc]
     text_pages = sum(1 for p in pages if p["chars"] >= MIN_TEXT_CHARS)
     scanned = text_pages == 0 and len(pages) > 0
+    source_scanned = scanned
+    if scanned and not args.ocr:
+        print("STOP: scanned PDF has no usable text layer. Rerun with --ocr "
+              "and RapidOCR. If RapidOCR is missing, obtain user consent "
+              "before downloading/installing it.", file=sys.stderr)
+        doc.close()
+        return 4
 
     # OCR pass. Only meaningful for a PDF with no text layer - a text PDF
     # already has better text than OCR would produce.
@@ -486,6 +520,12 @@ def main():
                 pages[i]["_text"] = text
                 pages[i]["chars"] = len(text)
                 print(f"  p{i + 1:>3}: {len(text)} chars")
+                if not text.strip():
+                    print(f"ERROR: OCR returned no text on page {i + 1}; "
+                          "review the scan or retry with --dpi 300.",
+                          file=sys.stderr)
+                    doc.close()
+                    return 1
             text_pages = sum(1 for p in pages if p["chars"] >= MIN_TEXT_CHARS)
             ocr_used = True
             # Judge OCR success on total yield, not on MIN_TEXT_CHARS: a
@@ -493,9 +533,12 @@ def main():
             # 100 chars/page easily but never reaches the body-text threshold,
             # and warning there cries wolf on a perfectly good extraction.
             total_chars = sum(p["chars"] for p in pages)
-            if total_chars < 20 * len(pages):
-                print("WARNING: OCR produced almost no text. The scan may be "
-                      "too low-resolution - retry with --dpi 300.")
+            if total_chars < 20:
+                print("ERROR: OCR produced almost no text. The scan may be "
+                      "too low-resolution - retry with --dpi 300.",
+                      file=sys.stderr)
+                doc.close()
+                return 1
             scanned = False
 
     full_text = "\n".join(
@@ -600,7 +643,7 @@ def main():
         "out_dir": os.path.abspath(out_dir),
         "pages": len(pages),
         "text_pages": text_pages,
-        "is_scanned": scanned,
+        "is_scanned": source_scanned,
         "ocr_used": ocr_used,
         "ocr_backend": ocr_backend,
         "ocr_lang": args.ocr_lang if ocr_used else None,
@@ -619,8 +662,8 @@ def main():
     print(f"pdf         : {os.path.basename(args.pdf)}")
     print(f"out         : {out_dir}")
     print(f"pages       : {len(pages)}  (text pages: {text_pages})")
-    if scanned:
-        print("SCANNED     : no text layer - use --ocr, or read figures/*.png visually")
+    if source_scanned:
+        print("SCANNED     : source has no text layer; read with RapidOCR")
     if ocr_used:
         print(f"OCR         : {ocr_backend} (lang={args.ocr_lang})")
     print(f"text        : {text_path}")

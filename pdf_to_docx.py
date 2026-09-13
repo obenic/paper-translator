@@ -37,31 +37,42 @@ and paragraph breaks, and still places figures inline, which is what
 docx_extract.py wants. Flowing is the default; --layout page is there if you
 ever need visual fidelity instead.
 
-Word COM is the fallback when Acrobat is absent: no setup, but a worse
-converter - on a two-column Elsevier paper it shattered running text into 58
-text boxes, splitting words ("ScienceDirec" + "t").
+RapidOCR is the automatic fallback. It rebuilds editable text and embeds
+source-page previews for review; it does not claim to reproduce the layout.
+The conversion report requires user review for this route, not for a
+successful Acrobat export. These are the only two conversion engines.
 
 Usage:
-    python pdf_to_docx.py <pdf> [-o out.docx] [--engine acrobat|word|auto]
+    python pdf_to_docx.py <pdf> [-o out.docx] [--engine acrobat|rapidocr|auto]
                                 [--layout flowing|page]
     python pdf_to_docx.py --install-acrobat-js   # one time, prompts for UAC
     python pdf_to_docx.py --check
 
 Exit codes:
-    0  DOCX written
+    0  DOCX and .conversion.json written
     2  no converter available
     1  error
 """
 
 import argparse
 import contextlib
+import csv
 import ctypes
+import io
+import json
+import multiprocessing
 import os
 import subprocess
 import sys
 import tempfile
 import time
-import winreg
+import zipfile
+from queue import Empty
+
+try:
+    import winreg
+except ImportError:
+    winreg = None
 
 try:
     import pythoncom
@@ -108,16 +119,18 @@ var tpExportThis = app.trustedFunction(function (outPath, convID) {
 ''' % JS_VERSION
 
 NO_CONVERTER = """
-Neither Acrobat Pro nor Word is usable on this machine, so skip step 0 and go
-to step 1 of the skill (extract_paper.py). If you do have Acrobat Pro, export
-by hand instead: File -> Export To -> Microsoft Word -> Word Document, and in
-that dialog Settings... -> Layout Settings -> "Retain Flowing Text".
+No selected converter succeeded. Do not skip the capability gate.
+If Acrobat Pro and RapidOCR are unusable, obtain the user's explicit consent
+to download/install RapidOCR, repair the reported dependencies, and rerun
+preflight.py. If consent is refused or pending, stop.
 """
 
 
 # --- registry ---------------------------------------------------------------
 
 def reg_get(sub, name):
+    if winreg is None:
+        return None
     try:
         with winreg.OpenKey(winreg.HKEY_CURRENT_USER, sub) as k:
             return winreg.QueryValueEx(k, name)[0]
@@ -173,6 +186,8 @@ def protected_mode_off():
 
 def acrobat_exe():
     """Acrobat's install path, from its App Paths registry entry."""
+    if winreg is None:
+        return None
     key = (r"SOFTWARE\Microsoft\Windows\CurrentVersion\App Paths"
            r"\Acrobat.exe")
     for hive in (winreg.HKEY_LOCAL_MACHINE, winreg.HKEY_CURRENT_USER):
@@ -236,7 +251,7 @@ def install_acrobat_js(quiet=False):
     print("elevating: approve the UAC prompt so Acrobat can load the export")
     print("           script (one time; Acrobat itself stays unelevated)")
     rc = ctypes.windll.shell32.ShellExecuteW(
-        None, "runas", "powershell.exe",
+        None, "runas", "pwsh.exe",
         '-NoProfile -ExecutionPolicy Bypass -File "%s"' % ps1, None, 0)
     if rc <= 32:
         print(f"ERROR: elevation refused or failed (ShellExecute {rc})",
@@ -277,8 +292,22 @@ def kill_acrobat():
     time.sleep(3)
 
 
-def convert_acrobat(pdf, out, layout="flowing", install=True, restart=True):
-    """Export through Acrobat Pro's own converter, unattended."""
+def _acrobat_pids():
+    """Snapshot Acrobat processes so timeout cleanup leaves older ones alone."""
+    result = subprocess.run(
+        ["tasklist", "/FI", "IMAGENAME eq Acrobat.exe", "/FO", "CSV", "/NH"],
+        capture_output=True, text=True, errors="replace", check=True, timeout=10)
+    return {int(row[1]) for row in csv.reader(result.stdout.splitlines())
+            if len(row) >= 2 and row[0].lower() == "acrobat.exe"}
+
+
+def _acrobat_worker(pdf, out, layout, result):
+    result.put(_export_acrobat(pdf, out, layout))
+
+
+def convert_acrobat(pdf, out, layout="flowing", install=True, restart=True,
+                    timeout=180):
+    """Export through Acrobat with a bounded, isolated COM worker."""
     if win32 is None:
         print("  acrobat: pywin32 missing (pip install pywin32)")
         return False
@@ -302,73 +331,154 @@ def convert_acrobat(pdf, out, layout="flowing", install=True, restart=True):
     with protected_mode_off():
         if restart:
             kill_acrobat()
-        app = avdoc = None
+        before = _acrobat_pids()
+        context = multiprocessing.get_context("spawn")
+        result = context.Queue()
+        worker = context.Process(
+            target=_acrobat_worker, args=(pdf, out, layout, result), daemon=True)
         try:
-            app = win32.DispatchEx("AcroExch.App")
-            avdoc = win32.DispatchEx("AcroExch.AVDoc")
-            if not avdoc.Open(os.path.abspath(pdf), "paper-translator"):
-                print("  acrobat: could not open the PDF")
+            worker.start()
+            worker.join(timeout)
+            if worker.is_alive():
+                print(f"  acrobat: export timed out after {timeout:g}s; "
+                      "stopping this attempt")
                 return False
-            jso = avdoc.GetPDDoc().GetJSObject()
             try:
-                version = call(jso, "tpVersion")
-            except Exception:                       # noqa: BLE001
-                print("  acrobat: folder script not loaded - quit Acrobat "
-                      "completely and rerun --install-acrobat-js")
+                return bool(result.get(timeout=1))
+            except Empty:
+                print(f"  acrobat: worker exited without a result "
+                      f"(exit code {worker.exitcode})")
                 return False
-            print(f"  acrobat: script {version}, layout {layout}")
-            result = call(jso, "tpExportThis", devpath(out))
-            if result != "ok":
-                print(f"  acrobat: {result}")
-                return False
-            for _ in range(30):     # saveAs returns synchronously; be safe
-                if os.path.exists(out) and os.path.getsize(out) > 0:
-                    return True
-                time.sleep(1)
-            print("  acrobat: saveAs reported ok but wrote no file")
-            return False
-        except Exception as e:                      # noqa: BLE001
-            print(f"  acrobat: {type(e).__name__}: {e}")
-            return False
         finally:
-            with contextlib.suppress(Exception):
-                avdoc.Close(True)
-            with contextlib.suppress(Exception):
-                app.Exit()
+            if worker.is_alive():
+                worker.terminate()
+                worker.join(5)
+                for pid in _acrobat_pids() - before:
+                    subprocess.run(
+                        ["taskkill", "/PID", str(pid), "/T", "/F"],
+                        capture_output=True)
+            result.close()
 
 
-def convert_word(pdf, out):
-    """Export through Word's own PDF importer. Automatic, lower fidelity."""
-    if win32 is None:
-        print("  word: pywin32 missing (pip install pywin32)")
-        return False
-    app = None
+def _export_acrobat(pdf, out, layout):
+    """COM calls may block on Acrobat UI; the parent owns the timeout."""
+    app = avdoc = None
     try:
-        app = win32.DispatchEx("Word.Application")
-        app.Visible = False
-        app.DisplayAlerts = 0
-        doc = app.Documents.Open(os.path.abspath(pdf), ConfirmConversions=False,
-                                 ReadOnly=False)
-        doc.SaveAs2(os.path.abspath(out), FileFormat=16)   # wdFormatDocx
-        print(f"  word: {doc.Paragraphs.Count} paragraphs, "
-              f"{doc.InlineShapes.Count + doc.Shapes.Count} images")
-        doc.Close(False)
-        return os.path.exists(out)
-    except Exception as e:                          # noqa: BLE001
-        print(f"  word: {type(e).__name__}: {e}")
+        app = win32.DispatchEx("AcroExch.App")
+        avdoc = win32.DispatchEx("AcroExch.AVDoc")
+        if not avdoc.Open(os.path.abspath(pdf), "paper-translator"):
+            print("  acrobat: could not open the PDF", flush=True)
+            return False
+        jso = avdoc.GetPDDoc().GetJSObject()
+        try:
+            version = call(jso, "tpVersion")
+        except Exception:                       # noqa: BLE001
+            print("  acrobat: folder script not loaded - quit Acrobat "
+                  "completely and rerun --install-acrobat-js", flush=True)
+            return False
+        print(f"  acrobat: script {version}, layout {layout}", flush=True)
+        result = call(jso, "tpExportThis", devpath(out))
+        if result != "ok":
+            print(f"  acrobat: {result}", flush=True)
+            return False
+        for _ in range(30):
+            if os.path.exists(out) and os.path.getsize(out) > 0:
+                return True
+            time.sleep(1)
+        print("  acrobat: saveAs reported ok but wrote no file", flush=True)
+        return False
+    except Exception as exc:
+        print(f"  acrobat: {type(exc).__name__}: {exc}", flush=True)
         return False
     finally:
         with contextlib.suppress(Exception):
-            app.Quit()
+            avdoc.Close(True)
+        with contextlib.suppress(Exception):
+            app.Exit()
+
+
+def convert_rapidocr(pdf, out, lang="en", dpi=200):
+    """Rebuild editable OCR text with embedded source pages for user review."""
+    try:
+        import pymupdf as fitz
+        import numpy as np
+        from docx import Document
+        from docx.shared import Inches, Pt
+        import ocr_engine
+    except ImportError as exc:
+        print(f"  rapidocr: missing dependency: {exc}")
+        return False
+
+    engine, _, note = ocr_engine.make_engine(
+        lang=lang, prefer=ocr_engine.BACKEND_RAPID)
+    if engine is None:
+        print(f"  rapidocr: {note}")
+        return False
+
+    doc = Document()
+    doc.core_properties.subject = "paper-translator:rapidocr; user review required"
+    doc.styles["Normal"].font.name = "Times New Roman"
+    doc.styles["Normal"].font.size = Pt(11)
+    section = doc.sections[0]
+    section.top_margin = section.bottom_margin = Inches(0.75)
+    section.left_margin = section.right_margin = Inches(0.75)
+    width = section.page_width - section.left_margin - section.right_margin
+    height = section.page_height - section.top_margin - section.bottom_margin
+    total_chars = 0
+    try:
+        with fitz.open(pdf) as source:
+            if not len(source) or source.needs_pass:
+                raise ValueError("PDF is empty or requires a password")
+            for index, page in enumerate(source):
+                pix = page.get_pixmap(dpi=dpi, colorspace=fitz.csRGB, alpha=False)
+                rgb = np.frombuffer(pix.samples, dtype=np.uint8).reshape(
+                    pix.height, pix.width, 3)
+                rows = ocr_engine.read(engine, rgb)
+                lines = [row["text"].strip() for row in rows if row["text"].strip()]
+                if not lines:
+                    raise ValueError(
+                        f"page {index + 1}: no text recognized; review the scan "
+                        "or rerun at a higher --dpi")
+                if index:
+                    doc.add_page_break()
+                doc.add_heading(f"Page {index + 1} - OCR text", level=1)
+                for line in lines:
+                    doc.add_paragraph(line)
+                total_chars += sum(map(len, lines))
+                doc.add_page_break()
+                doc.add_heading(f"Page {index + 1} - source preview", level=1)
+                preview_width = min(width, int((height - Inches(0.7))
+                                              * pix.width / pix.height))
+                doc.add_picture(io.BytesIO(pix.tobytes("png")),
+                                width=preview_width)
+                print(f"  rapidocr: page {index + 1}/{len(source)}, "
+                      f"{sum(map(len, lines))} chars", flush=True)
+        doc.save(out)
+    except Exception as exc:
+        print(f"  rapidocr: {type(exc).__name__}: {exc}")
+        return False
+    print(f"  rapidocr: {total_chars} editable chars; source previews embedded")
+    return True
+
+
+def valid_docx(path):
+    """Reject missing/truncated exports instead of reporting false success."""
+    try:
+        with zipfile.ZipFile(path) as archive:
+            return ("word/document.xml" in archive.namelist()
+                    and archive.testzip() is None)
+    except (OSError, zipfile.BadZipFile):
+        return False
 
 
 def check():
-    """Report whether the unattended Acrobat route is ready to run."""
+    """Check Acrobat and RapidOCR without launching Word or another app."""
+    import preflight
+
     print("converter availability")
-    if win32 is None:
-        print("  pywin32          : MISSING (pip install pywin32)")
-        return 2
-    print("  pywin32          : ok")
+    probes = preflight.collect()
+    for probe in preflight.figure_caps(probes):
+        preflight._row(probe)
 
     exe = acrobat_exe()
     if exe:
@@ -389,14 +499,7 @@ def check():
     print(f"  iLayoutMode      : {layout} "
           f"({'page' if layout == 1 else 'flowing'}); set per export")
 
-    try:
-        w = win32.DispatchEx("Word.Application")
-        ver = w.Version
-        w.Quit()
-        print(f"  Microsoft Word   : {ver} (fallback)")
-    except Exception:                               # noqa: BLE001
-        print("  Microsoft Word   : no")
-    return 0
+    return preflight.decide(probes)
 
 
 def main():
@@ -405,8 +508,12 @@ def main():
     ap = argparse.ArgumentParser(add_help=True)
     ap.add_argument("pdf", nargs="?")
     ap.add_argument("-o", "--out")
-    ap.add_argument("--engine", choices=("auto", "acrobat", "word"),
+    ap.add_argument("--engine", choices=("auto", "acrobat", "rapidocr"),
                     default="auto")
+    ap.add_argument("--ocr-lang", default="en", help="RapidOCR language")
+    ap.add_argument("--dpi", type=int, default=200, help="RapidOCR render DPI")
+    ap.add_argument("--acrobat-timeout", type=float, default=180,
+                    help="maximum Acrobat export seconds before fallback (default: 180)")
     ap.add_argument("--layout", choices=("flowing", "page"), default="flowing",
                     help="flowing keeps reading order (default); page keeps "
                          "visual position but scrambles sentence order")
@@ -420,8 +527,10 @@ def main():
     ap.add_argument("--no-restart", action="store_true",
                     help="do not kill a running Acrobat before exporting")
     args = ap.parse_args()
-
-    restore_stashed_protected_mode()
+    if args.dpi <= 0:
+        ap.error("--dpi must be positive")
+    if args.acrobat_timeout <= 0:
+        ap.error("--acrobat-timeout must be positive")
 
     if args.install_acrobat_js:
         return 0 if install_acrobat_js() else 1
@@ -434,24 +543,46 @@ def main():
         return 1
 
     out = args.out or os.path.splitext(os.path.abspath(args.pdf))[0] + ".docx"
-    order = {"auto": ("acrobat", "word"),
-             "acrobat": ("acrobat",), "word": ("word",)}[args.engine]
+    report_path = os.path.splitext(os.path.abspath(out))[0] + ".conversion.json"
+    if os.path.exists(out) or os.path.exists(report_path):
+        print(f"ERROR: output already exists; choose an unused -o path: {out}",
+              file=sys.stderr)
+        return 1
+    os.makedirs(os.path.dirname(os.path.abspath(out)), exist_ok=True)
+    order = {"auto": ("acrobat", "rapidocr"),
+             "acrobat": ("acrobat",), "rapidocr": ("rapidocr",)}[args.engine]
 
     print(f"pdf     : {args.pdf}")
     for engine in order:
         print(f"trying  : {engine}")
-        ok = (convert_acrobat(args.pdf, out, layout=args.layout,
-                              install=not args.no_install,
-                              restart=not args.no_restart)
-              if engine == "acrobat" else convert_word(args.pdf, out))
-        if ok:
+        if engine == "acrobat":
+            restore_stashed_protected_mode()
+            ok = convert_acrobat(args.pdf, out, layout=args.layout,
+                                 install=not args.no_install,
+                                 restart=not args.no_restart,
+                                 timeout=args.acrobat_timeout)
+        else:
+            ok = convert_rapidocr(args.pdf, out, lang=args.ocr_lang, dpi=args.dpi)
+        if ok and valid_docx(out):
+            review = engine == "rapidocr"
+            with open(report_path, "w", encoding="utf-8") as stream:
+                json.dump({
+                    "pdf": os.path.abspath(args.pdf),
+                    "docx": os.path.abspath(out),
+                    "engine": engine,
+                    "requires_word_review": review,
+                }, stream, ensure_ascii=False, indent=2)
             print(f"docx    : {out}  "
                   f"({os.path.getsize(out) / 1e6:.1f} MB, via {engine})")
-            if engine == "word":
-                print("\nNOTE: Word's converter fragments running text into "
-                      "many small text boxes,\n      so the translation may "
-                      "read choppy. Acrobat Pro's export is cleaner.")
+            print(f"report  : {report_path}")
+            print("review  : " + (
+                "REQUIRED - show the Word result and ask whether it is "
+                "satisfactory; do not continue before the user's answer"
+                if review else
+                "SKIP - Acrobat export succeeded; do not ask Word satisfaction"))
             return 0
+        if ok:
+            print(f"  {engine}: invalid DOCX output")
     print("\nno converter worked.")
     print(NO_CONVERTER)
     return 2
