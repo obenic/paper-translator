@@ -7,7 +7,46 @@ description: Use when the user asks to translate an academic paper, PDF, Word/.d
 
 把学术论文 PDF 译成中文，**图文完整**，同时产出 Markdown 与 PDF，最后连同原件收进以中文题目命名的文件夹。
 
+## 交付路径契约（执行前必读）
+
+**完成翻译不等于完成交付。默认交付位置唯一：`用户原件最初所在目录 / 文献中文题目 /`，其中放原件、译文 `.md` 和译文 `.pdf`。** 这不是可选的收尾整理；6.1 归档和 7.0 实际文件检查通过后才能说“已完成”。“只输出 md + pdf”仅指新生成的译文格式，不表示可以把原件留在外面。
+
+本任务的专用路径规则优先于工作区“最终交付物默认放 `D:\codex\outputs`”这一通用默认值。除非用户在**当前请求中明确指定其他交付位置或原件保留方式**，不得改放到 `outputs`、桌面、Skill 目录、当前工作目录或临时目录，也不要再次询问是否需要按本规则归档。明确的用户覆盖指令要记录并遵守；真实权限限制导致无法归档时报告阻塞，不得静默换地方后宣称完成。
+
+执行转换前，记录以下路径，并在任务进度或中断续跑记录中保留：
+
+| 名称 | 取值与约束 |
+|---|---|
+| `SOURCE_INITIAL` | 用户指定原件的绝对路径；任何临时副本都不能替换此记录，移动后也不改写 |
+| `SOURCE_PARENT` | `SOURCE_INITIAL` 最初的父目录；不是工作副本、转换后 Word 或译文的父目录 |
+| `WORK_DIR` | 本次独立工作目录，按工作区规则可用 `D:\codex\work\<task-name>`；转换、提图、译文草稿和 PDF 排版均在此进行 |
+| `ZH_TITLE` | 从正文核实并翻译的文献题目，即 5.1 的中文 H1；按 6.1 处理非法字符和过长题目 |
+| `ARCHIVE_DIR` | `SOURCE_PARENT / ZH_TITLE`；中文题目确认后立即给出这个绝对路径，6.1 才创建并归档 |
+
+题目尚未译出时只记录前三项，不猜题目、不提前建英文或“翻译结果”文件夹。先在进度中说明“将归档到原件所在目录下的中文题名文件夹”。只有附件临时副本或 URL、无法知道用户原件位置时，先询问归档父目录；不得把附件缓存当成用户原件位置。
+
+例如，原件为 `E:\文献\paper.pdf`，中文题目为“缺陷调控的发光机制”，完成后的结构必须是：
+
+```text
+E:\文献\缺陷调控的发光机制\
+  paper.pdf
+  <原文标题> 中文翻译.md
+  <原文标题> 中文翻译.pdf
+```
+
+默认移动成功后 `E:\文献\paper.pdf` 不再存在。不是把两份译文散放在 `E:\文献\`，也不是在 `D:\codex\outputs\` 下创建同名中文文件夹。批量翻译时每篇独立记录原件位置和归档目录，不能统一套用第一篇的父目录。恢复中断任务时先恢复这些记录，不能从临时副本重新推导路径。
+
+以下处理流程仍须完整执行；本节只固定交付路径，不跳过环境、图文和翻译质量检查。
+
 流程图见 [`docs/pipeline.drawio`](D:/skills/paper-translator/docs/pipeline.drawio)，预览/可编辑导出见 [`docs/pipeline.drawio.png`](D:/skills/paper-translator/docs/pipeline.drawio.png)。2026-09-13 更新：自检只接受 Acrobat Pro 和 RapidOCR；Acrobat 直转 Word 成功后不询问满意度，OCR 重建 Word 后必须询问；默认不保存独立图片合集。
+
+**2026-09-15 OCR 路径规则：只检测真实 Skill 目录中的 `ocr/`。程序和依赖在 `ocr/.venv/`，模型在 `ocr/models/`；全局 Python、其他项目环境或 C 盘注册入口里的 OCR 均不算已安装。缺失时先请求用户同意下载到本 Skill，再运行 `setup_ocr.py --install`。**
+
+**2026-09-15 Acrobat 路线定案：只走 COM 受信任函数（`pdf_to_docx.py` 里的 `tpExportThis`），正常导出无需界面交互。** 当天曾试过一版 UI 自动化（SendKeys 打开菜单、UIAutomation 往「另存为」对话框填路径），结果是「无法写入指定的文件」弹窗，已回滚。**不要再往 UI 自动化方向改，也不要仅凭该弹窗认定用了 UI 自动化**；COM 的 `saveAs` 在保护模式未真正关闭等情况下也会弹出同样错误。
+
+**2026-09-16 Codex 注册表视图修复：Acrobat 用户配置统一通过 Windows `StdRegProv` 访问真实用户配置。** 本机曾出现 Codex 内 `HKCU`、`HKEY_USERS` 的 32/64 位读取都报告 `bProtectedMode=0`，但进程外注册表服务和 Acrobat 实际使用的值仍为 `1`，导致 COM 导出弹窗并挂住。`pdf_to_docx.py` 现在按当前进程令牌的用户 SID，通过同一真实通道读取、设置并恢复配置；`--check` 也显示该真实值。不要用普通 `reg query`、`Get-ItemProperty` 或 `winreg` 的宿主视图单独认定保护模式已关闭。无需换模型、改为 UI 导出或重新安装受信任脚本。
+
+**Acrobat 转换不依赖 Claude 或 GPT 接口。** 这一步由脚本完成，模型负责执行工具调用、读取退出码和 `.conversion.json`，并按下面「流程」开头那两段把 `$SK`、`$PY` 指对。宿主环境和 Acrobat 的实际状态仍需自检与真实导出验证，不能仅凭模型名称、脚本版本或一次静态检查认定转换可用。
 
 ## 铁律：论文 = 正文 + 图
 
@@ -34,23 +73,22 @@ $SK = 'D:\skills\paper-translator'
 Get-Item -LiteralPath "$SK\preflight.py"
 ```
 
-那一行检查不能跳。`C:\Users\win10\.codex\skills\paper-translator\SKILL.md` 是注册入口，脚本和相对路径均按 D 盘真实目录解析。Windows 命令使用 PowerShell 7；下文 Bash 示例在 PowerShell 中需写为 `& $PY "$SK\脚本.py"`。
+那一行检查不能跳。`C:\Users\win10\.claude\skills\paper-translator\SKILL.md` 与 `C:\Users\win10\.codex\skills\paper-translator\SKILL.md` 都只是注册入口，脚本和相对路径均按 D 盘真实目录解析。Windows 命令使用 PowerShell 7；下文 Bash 示例在 PowerShell 中需写为 `& $PY "$SK\脚本.py"`。
 
-**再把 `$PY` 指对，否则依赖装了也会报一串 MISSING。** `$PY` 是**装了本 skill 依赖的那个解释器**，未必是裸 `python`：
+**`$PY` 固定为本 Skill 内的解释器，不搜索或猜测其他 Python：**
 
-```bash
-PY=python                                  # 多数情况够用
-echo "${VIRTUAL_ENV:-<none>}"              # 有值 = 当前在 venv 里，裸 python 就是 venv 那个
+```powershell
+$PY = Join-Path $SK 'ocr\.venv\Scripts\python.exe'
+if (-not (Test-Path -LiteralPath $PY)) {
+    $PY = 'python'  # 仅用于运行自检或安装器；全局 OCR 不会被认可
+}
 ```
 
-`$VIRTUAL_ENV` 有值时**先别信裸 `python`**：venv 默认 `include-system-site-packages = false`，全局装的包它一个都看不到。这种机器上 1.0 可能把两条路径都判为不可用并 exit 4。先排除解释器选错，不要让用户重复安装：
-
-```bash
-py -0p                          # Windows：列出所有注册的解释器，带 * 的是当前
-which -a python python3         # macOS / Linux
-```
-
-**判据只有一个：拿它跑 1.0，报告干净就是它。** 别用「import 某个包成功」代替——venv 里往往恰好有 PyMuPDF 而缺 lxml/pywin32/rapidocr，单包探针会给你一个假的通过。定下来之后每条命令都用同一个，报告开头的 interpreter 行就是给你核对这件事的。
+macOS / Linux 对应 `"$SK/ocr/.venv/bin/python"`。OCR 尚未安装时用系统 Python 跑自检，
+再按 1.0 请求安装同意。**不要用 `py -0p`、切换外部 venv 或全盘搜索来“找回 OCR”。**
+`preflight.py`、`pdf_to_docx.py`、`extract_paper.py`、`panel_split.py`、`ocr_engine.py`
+的命令行入口在本地解释器存在时会自动切换到它；其余步骤统一使用报告中的解释器。
+虚拟环境不是跨机器便携包；换机器或移动 Skill 后应重新运行本地安装器。
 
 步骤编号一览，照这个顺序走：
 
@@ -59,6 +97,7 @@ which -a python python3         # macOS / Linux
 | **1.0** | 环境自检 `preflight.py` | 脚本 |
 | **2.0** | PDF → Word `pdf_to_docx.py` | 脚本 |
 | **2.1** | Acrobat Word 抽正文和图；OCR Word 准备核对预览 | 脚本 |
+| **2.1.1** | **整图核验** `crop_figures.py --compare`：Word 抽出的图是不是被拆成了单列碎片 | 脚本 |
 | **2.2** | **Acrobat 直转成功不问满意度；OCR 重建 Word 必须问。图片交叉验证单独选择** | 人工 |
 | **3.0** | 回退提取 `extract_paper.py`（OCR 路径补图，或自动检查发现转换缺失时） | 脚本 |
 | **4.0** | **按 2.2 的选择执行可选的面板切分与交叉验证** | 脚本 + 你数 `--layout` |
@@ -66,26 +105,28 @@ which -a python python3         # macOS / Linux
 | **5.1** | 写 Markdown | 模型 |
 | **5.2** | 插图归位 `insert_figures.py` | 脚本 |
 | **5.3** | 加目录 `add_toc.py` | 脚本 |
-| **5.4** | 将图片内嵌进 Markdown `inline_images.py`，清理临时图片目录 | 脚本 |
-| **6.0** | 转 PDF `md_to_pdf.py`（目录页 + PDF 书签自动生成） | 脚本 |
-| **6.1** | 归档：在原件所在目录建「中文题目」文件夹，收原 PDF + `.md` + `.pdf`，清脚手架 | 模型 |
+| **5.4** | 将图片内嵌进 Markdown `inline_images.py`，暂不清理工作文件 | 脚本 |
+| **6.0** | 在 `WORK_DIR` 转 PDF `md_to_pdf.py`；成功后必须继续 6.1 | 脚本 |
+| **6.1** | 必做：将原件 + `.md` + 译文 `.pdf` 归档到 `ARCHIVE_DIR`，实际检查路径与文件 | 模型调用文件工具 |
 | **7.0** | 完成前自检 | 模型 + 人工 |
 
 ### 1.0 环境自检：先确认这台机器干得了这活
 
 **这是第一条命令，比转 Word 更早。能力自检只检查 Acrobat Pro 和 RapidOCR。** 其他条目仅是运行依赖或 PDF 输出依赖，不能替代这两项放行。
 
-```bash
-"$PY" "$SK/preflight.py"
-"$PY" "$SK/preflight.py" --json
+```powershell
+& $PY "$SK\preflight.py"
+& $PY "$SK\preflight.py" --json
 ```
 
 | 能力 | 怎么检测的 | 有了它 | 没有它 |
 |---|---|---|---|
 | Acrobat Pro | Windows 安装路径、COM 注册和 pywin32；导出时再确认实际可用 | 优先直接将原 PDF 转 Word，抽取原位图文 | 使用 RapidOCR 重建 Word |
-| RapidOCR | `rapidocr`、`onnxruntime`、`cv2` 等运行依赖 | OCR 识别、重建可编辑 Word；校验面板标签 | Acrobat 仍可直转；面板标签交叉验证不可用 |
+| RapidOCR | 本 Skill 的 `ocr/.venv` 解释器、该环境内的包及依赖、`ocr/models` 三个默认模型的 SHA256 | OCR 识别、重建可编辑 Word；校验面板标签 | 请求下载到本 Skill；Acrobat 仍可直转，但 OCR 步骤不可用 |
 
-仅安装 Word 或 PaddleOCR 不满足此门禁。Acrobat 路径需要 lxml；OCR 重建 Word 还需要 python-docx、Pillow 和 NumPy。
+只有本 Skill 内的 RapidOCR 满足 OCR 门禁；Word 或全局安装均不算。Acrobat 路径需要 lxml；
+OCR 重建 Word 还需要 python-docx、Pillow 和 NumPy。自检只读，不安装、不下载模型、不启动 Acrobat。
+不能仅凭 `ocr/` 文件夹存在或 `import rapidocr` 成功就宣布 OCR 可用。
 
 **退出码：**
 
@@ -93,31 +134,41 @@ which -a python python3         # macOS / Linux
 |---|---|---|
 | `0` | Acrobat Pro 或 RapidOCR 至少一条路径可用 | 按实际可用路径继续；不能据此把未执行的检查写成已通过 |
 | `1` | 连 PyMuPDF 都没有 | `"$PY" -m pip install pymupdf` |
-| `4` | **两条路径均不可用** | 核对解释器和依赖后，必须征得用户同意下载、安装 RapidOCR；未同意则停止 |
+| `4` | **两条路径均不可用** | 必须征得用户同意下载、安装 RapidOCR 到 `$SK/ocr`；未同意则停止 |
 
-**exit 4 先排除解释器或依赖选错。** 例如 Acrobat 已装但 lxml 缺失，应先补齐对应依赖并重跑，不把它误报成软件没装。
+**本地 OCR 缺失、不完整或损坏时，一律明确询问：“是否同意下载或修复 RapidOCR、
+运行依赖和模型，并安装到此 Skill 的 `<真实目录>/ocr` 文件夹？”**
+将占位符替换为实际绝对路径。即使全局装过也不能跳过本地安装要求。
+JSON 中 `requires_rapidocr_install_consent=true` 表示需要此询问，即使 Acrobat 可用、退出码为 0。
+两条路径都不可用且用户拒绝或尚未回答时停止，文字版 PDF 也不能绕过。
+只有 Acrobat 可用时，用户不安装 OCR 仍可直转并保留整图，但不能执行任何 OCR 步骤。
 
-**确认 Acrobat 和 RapidOCR 都不可用时，必须暂停并明确询问：“是否同意下载并安装 RapidOCR 及运行依赖，以继续处理这篇文献？”** 说明首次运行可能下载 OCR 权重。只有用户明确同意后才执行安装；用户拒绝或尚未回答就停止。即使 PDF 有文本层、用户跳过图片验证，也不能绕过此要求。不提供跳过门禁的参数。
-
-```bash
-# 仅在用户同意后执行，实际下载量取决于已有依赖和模型缓存
-"$PY" -m pip install --no-deps rapidocr
-"$PY" -m pip install onnxruntime shapely pyclipper omegaconf colorlog numpy pillow requests tqdm six PyYAML python-docx
+```powershell
+# 仅在用户明确同意后执行；安装器不修改全局包，也不写入 C 盘注册入口
+python "$SK\setup_ocr.py" --install
+if ($LASTEXITCODE -ne 0) { throw 'OCR 安装失败，先检查报告，不继续翻译' }
+$PY = Join-Path $SK 'ocr\.venv\Scripts\python.exe'
+& $PY "$SK\preflight.py" --json
 ```
 
-**`--no-deps` 不能省。** `rapidocr` 声明依赖 `opencv_python`，而多数环境装的是
-`opencv-contrib-python`——两者争同一个 `cv2` 目录，直接装会互相覆盖。contrib 版提供的
-`cv2` 完全够用。只有确认 `cv2` 不存在时才另装 `opencv-python`，不要覆盖已有 OpenCV。
+安装器会创建隔离环境，安装 `requirements-ocr.txt`，复用当前解释器已下载的默认模型，
+并将缺失模型下载到 `$SK/ocr/models`。不带 `--install` 只显示提示，不做安装。
+本地环境只安装一种 OpenCV，不与全局 `opencv-contrib-python` 共用目录。
+**不要另用全局 `pip install rapidocr` 或把全局包文件夹直接剪切进 Skill。**
+报告必须显示 `probes.ocr.ok=true`，并核对 `ocr_root`、`ocr_python`、`ocr_models`
+均在本 Skill 下；单独的退出码 0 可能只代表 Acrobat 可用。
 
-它跑的**就是百度那套 PP-OCR 权重**（RapidOCR 把模型转成了 ONNX，版权仍归百度），
-所以这不是精度取舍。实测：6 张插图上同权重快 7.9 倍、用它更轻的默认档快 18.7 倍；
-一篇 9 页论文整页 OCR 快 28.5 倍，而召回率两边都是 99.3%。
+RapidOCR 默认使用 ONNX 格式的 PP-OCRv6 small 检测、识别模型及方向分类模型，
+三个模型统一保存在 `ocr/models` 并校验 SHA256。
 
-**不要建议改装其他 OCR。** 默认流程只用 RapidOCR；`ocr_engine.py` 中的其他后端仅为显式兼容调用保留，不参与自检放行。
+**所有 OCR 必须使用本 Skill 内的 RapidOCR，不提供其他引擎或兼容分支。**
+RapidOCR 不可用或初始化失败时停止 OCR 步骤，征得用户同意后修复本地环境，
+不能改用全局环境或其他引擎继续。
 
 **只有 Acrobat、没有 RapidOCR 时**，可以直接转 Word 并保留整图。用户若要求面板标签交叉验证，必须先同意安装 RapidOCR；不能把 `--no-ocr` 几何检查冒充完整验证。Acrobat 实际导出失败、RapidOCR 又不可用时，同样暂停请求安装同意。
 
-**报告开头那行 interpreter 必须和你定的 `$PY` 是同一个。** 对不上，就是拿一个解释器查依赖、拿另一个跑脚本——一串 MISSING 多半出在这里，而不是真没装（见「流程」开头 `$PY` 那段）。
+**报告的 interpreter 是实际完成自检的解释器。** 自动切换后将 `$PY` 设为该路径；
+不要为了消除 MISSING 改用全局解释器。本地依赖或模型损坏时按同一本地安装流程修复。
 
 ### 2.0 首选路径：先把 PDF 转成 Word
 
@@ -125,7 +176,7 @@ which -a python python3         # macOS / Linux
 
 **面板不再默认切。** 转换器给出的是一个图号一张文件（`media/fig02.jpg` = 整张 Fig 2），多面板图仍然是挤在一起的合成图；只有用户在 2.2 同意“交叉验证切割的图片”时，4.0 才把它切成面板并逐项验证。用户跳过时直接保留整张图。
 
-> Word 文档只是脚手架，**不是交付物**。最终只交付 Markdown + PDF；整图或已验证的面板会内嵌在 Markdown 中，PDF 再由 `md_to_pdf.py` 内嵌。**不要询问是否保存图片合集，默认不保存独立图集。** 处理所需图片只放任务工作目录，不交付 `panels/`、`_figs/` 等目录；只有用户主动明确要求图集才另行处理。
+> 转换生成的 Word 文档只是脚手架，**不是交付物**。新生成的译文只有 Markdown + PDF，交付文件夹还必须包含用户原件；用户直接提供的 `.docx` 是原件，不是待清理的脚手架。整图或已验证的面板会内嵌在 Markdown 中，PDF 再由 `md_to_pdf.py` 内嵌。**不要询问是否保存图片合集，默认不保存独立图集。** 处理所需图片只放任务工作目录，不交付 `panels/`、`_figs/` 等目录；只有用户主动明确要求图集才另行处理。
 
 **已经有 `.docx` 原件时**（用户直接给 Word 版论文，或自己导出过），跳过本步，直接从 2.1 开始——`docx_extract.py` 吃任意 `.docx`。
 
@@ -145,13 +196,18 @@ Acrobat 的 COM 导出在独立进程中执行，默认最多等待 180 秒；�
 
 **不要以管理员身份运行 Acrobat 或本脚本。** 只有那一次文件复制需要提权，Acrobat 和 Python 都以普通用户运行——提权进程与普通进程之间的 COM 连接会被 Windows 的完整性级别隔离挡掉。
 
-打通这条路要同时绕过三个坑，脚本已全部处理，遇到相关报错时按此对照：
+**导出前脚本会关闭正在运行的 Acrobat。** Protected Mode 只在 Acrobat 启动时读取，所以必须先退出再以关沙箱的状态重开；用户手头有没保存的 Acrobat 文档时先提醒保存。`--no-restart` 可跳过关闭，但那样沙箱设置对已开着的实例不生效，`saveAs` 会挂到超时。导出完成后 Acrobat 自动退出，偶尔残留一个 `AcroCEF` 辅助进程，几秒内自行结束。
+
+导出成功的判据是脚本的三行输出：`acrobat: script paper-translator/N` 说明受信任脚本已加载，`docx :` 那行给出文件大小，`review : SKIP` 说明走的是 Acrobat。整个过程没有任何窗口需要点，看到弹窗就是异常，按「常见错误」排查。
+
+打通这条路需要处理以下问题，遇到相关报错时按此对照：
 
 | 坑 | 症状 | 处理 |
 |---|---|---|
 | pywin32 调用约定 | **任何** JSObject 方法都报「尚未实现」(E_NOTIMPL)，连非特权的 `getPageNumWords()` 都报 | 用纯 `DISPATCH_METHOD` 调用，见 `call()` |
 | folder 脚本位置 | 脚本装了却调不到（`AttributeError`，名字不存在） | Acrobat 25.x 只读**应用级** `<安装目录>\Javascripts\`，用户级 `%APPDATA%` 那个完全忽略；写应用级要提权 |
 | Protected Mode | `saveAs` **静默挂死**——不报错、不超时、无对话框 | 导出期间临时关沙箱，结束后自动恢复（进程被杀也能在下次运行时补恢复） |
+| 宿主注册表视图不一致 | 普通注册表读取显示 `0`，Acrobat 仍使用沙箱；COM 导出可能弹出「无法写入指定的文件」 | 用户配置读写统一使用 `StdRegProv` 的真实用户配置通道；用更新后的 `--check` 检查，服务失败时不要回退到宿主视图 |
 
 「尚未实现」这句报错最误导：它看着像特权拒绝，其实只是调用约定不对。三个坑叠在一起共用这一句报错，是这条路长期被判定为「无法自动化」的原因。
 
@@ -195,6 +251,22 @@ Acrobat 的 COM 导出在独立进程中执行，默认最多等待 180 秒；�
 **exit 3 不等于编号错了。** 图注被粘进正文那种情况，编号已按正文引用修正好（看 `content.md` 里的 `[[FIG n]]` 确认），但那条图注的文字仍散在正文段落里，要自己拼回来再翻译。`manifest.json` 的 `problems` 数组列出具体是哪一条不符。
 
 `content.md` 里 `<!-- 不翻译 -->` 标记的段落是参考文献/致谢/声明那些，翻译时跳过。
+
+### 2.1.1 整图核验：Word 抽出的图可能只是四分之一张
+
+**2.1 的三方交叉校验查不出这种残缺。** Acrobat 导出时把并排多列的图（四个色心四列）拆成多个图片对象，`docx_extract.py` 把**第一列**命名成 `fig02.png`——图号、图注、正文引用全部对得上，读者拿到的却是四分之一张图。2026-09-14 实测一篇 18 图论文有 13 张是这样，靠肉眼在拼贴表里才发现。
+
+所以 2.1 之后必跑一次比对，对上了再往下走：
+
+```bash
+"$PY" "$SK/crop_figures.py" "<pdf>" -o "<tmp_dir>/_figs" --compare "<out>/media"
+```
+
+它不碰 `.docx`：按原 PDF 里每条 `Figure N.` 图注的坐标，把图注**上方**（`--below` 则下方）的图片块和矢量绘图块并起来，按 220 dpi 渲染成 `figNN.png`。`--compare` 逐图报告 Word 图宽 / 裁剪宽的比值，**低于 0.6 标 FRAGMENT，那一张改用裁剪结果**；其余用哪份都行，裁剪版分辨率更稳定，直接全用裁剪版最省事。
+
+- 退出码 3 = 某条图注上方没有任何图形块（图注在图上方的期刊加 `--below` 重跑），或 `--figs` 点名的图号在 PDF 里没有图注——去看那一页，别猜。
+- 裁剪范围以图注和上一段正文为界，所以**正文段落夹在图与图注之间**的排版会裁出正文；`--dry-run` 先看 clip 坐标，异常的单独用 `--figs` 调。
+- 补充材料的 `Figure SF1.` 这类带字母前缀的图注不匹配，需要时手动从 `media/` 拼（多列碎片横向 `hstack` 即可）。
 
 ### 2.2 按实际来源决定是否询问 Word 满意度
 
@@ -291,20 +363,20 @@ Acrobat 的 COM 导出在独立进程中执行，默认最多等待 180 秒；�
 - **参考文献、致谢、声明类章节不翻译**
 - 术语首次出现附原文：系间窜越（intersystem crossing, ISC）
 - 化学式、单位、数值、公式编号、图表编号（Fig. 1a）原样保留
-- 公式用 Unicode 符号表达，复杂公式辅以文字说明
+- **公式直接写 LaTeX**：行内 `$...$`，行间 `$$...$$` 独占一行、前后各空一行。6.0 用 pandoc `--mathml` 渲染，Chrome 原生支持，不依赖 MathJax 脚本（MathJax 是网页端 JS，无头打印在它加载前就出图了，公式会原样留成 `\hat{y}` 源码——2026-09-14 踩过）。不要把公式写进代码块，那只在等宽字体下勉强对齐，且无法被搜索
 - 人名、期刊名保留英文
 - **转义作者行里的 `*` 和 `#`**（通讯作者/共一标记）：写成 `\*` `\#`。两个裸 `*` 会配对成斜体，把中间所有作者名变成斜体
 
 ### 5.1 写 Markdown
 
-先在临时工作目录里用相对路径组织图片，最终交付的文件只有：
+先从原文正文核实中文题目，写为 H1，并按开头的路径契约确定 `ZH_TITLE` 和 `ARCHIVE_DIR`，向用户显示最终归档绝对路径。原件在 6.1 前保持原位。先在 `WORK_DIR` 里用相对路径组织图片，本次新生成的译文文件只有：
 
 - `<原文标题> 中文翻译.md`
 - `<原文标题> 中文翻译.pdf`
 
-两个文件在 6.1 连同原文 PDF 一起收进以中文题目命名的文件夹；**文件名保持原文标题，只有文件夹名用中文**，这样它们跟旁边的原 PDF 一眼对得上。
+两个文件在 6.1 连同原文 PDF 一起收进 `ARCHIVE_DIR`；**文件名保持原文标题，只有文件夹名用中文**，这样它们跟旁边的原 PDF 一眼对得上。下文 `<译文.md>` 统一指 `WORK_DIR` 中的该译文，不能把这个工作路径当成交付路径。
 
-5.4 会把 Markdown 中的本地图片链接改成 `data:image/...;base64,...`，所以最终 `.md` 不依赖同级图片文件夹；临时的 `panels/`、`_figs/` 和 `media/` 在 6.1 归档确认后删除。
+5.4 会把 Markdown 中的本地图片链接改成 `data:image/...;base64,...`，所以最终 `.md` 不依赖同级图片文件夹；临时的 `panels/`、`_figs/` 和 `media/` 在 6.1 归档确认后按清理规则处理。
 
 **临时路径仍要避开圆括号。** 5.2 还要在图片内嵌前解析文件名来识别图号；原标题带 `(Small 2024)` 时写成 `Small 2024`。空格可以保留，5.4 会在内嵌前正确读取本地路径；5.4 成功后最终 Markdown 不再包含这些路径。
 
@@ -381,19 +453,21 @@ pandoc 的 `implicit_figures` 会把它变成 `<figure>` + `<figcaption>` 原子
 
 ### 5.4 将图片内嵌进 Markdown
 
-这一步把临时图片资源写进 Markdown 本身，满足“最终只输出 md + pdf”的要求：
+这一步把临时图片资源写进 Markdown 本身，使两份译文不依赖外部图片；它们仍须与原件一起归档：
 
 ```bash
 "$PY" "$SK/inline_images.py" "<译文.md>"
 ```
 
-脚本会把所有本地 `![...](路径)` 改成 `![...](data:image/...;base64,...)`，保留图注和正文位置，并在原文件旁留下 `.bak`。退出码 `3` 表示仍有缺失图片或远程图片，不能继续交付；修复后重新运行。确认 5.4 和 6.0 都成功后进入 6.1 归档；临时图片目录和本次流程产生的 `.bak` 等归档确认后再删，最终交付只保留 `.md` 和 `.pdf`。
+脚本会把所有本地 `![...](路径)` 改成 `![...](data:image/...;base64,...)`，保留图注和正文位置，并在原文件旁留下 `.bak`。退出码 `3` 表示仍有缺失图片或远程图片，不能继续交付；修复后重新运行。确认 5.4 和 6.0 都成功后进入 6.1，归档原件、译文 `.md` 和译文 `.pdf` 三件套；临时图片目录和本次流程产生的 `.bak` 等归档确认后按 6.1 的清理规则处理。
 
 ### 6.0 转 PDF
 
 ```bash
-"$PY" "$SK/md_to_pdf.py" "<译文.md>"
+"$PY" "$SK/md_to_pdf.py" "<WORK_DIR>/<原文标题> 中文翻译.md" -o "<WORK_DIR>/<原文标题> 中文翻译.pdf"
 ```
+
+**md_to_pdf.py 不会归档。** 它不知道 `SOURCE_INITIAL` 和 `ARCHIVE_DIR`，退出码 0 只表示转换步骤成功，不表示三个文件已经归位。读取输出、完成图文检查后，必须执行 6.1；不得在这里直接发完成消息或仅给出工作目录中的下载链接。
 
 pandoc → 自包含 HTML（图片转 data URI）→ Chrome/Edge 无头打印。不需要 LaTeX。
 默认输出同名 `.pdf`；`--font sans` 把正文中文换成黑体，`--keep-html` 保留中间 HTML 排查排版。
@@ -408,7 +482,7 @@ pandoc → 自包含 HTML（图片转 data URI）→ Chrome/Edge 无头打印。
 |---|---|---|
 | 正文、图注 | 宋体（SimSun） | Times New Roman |
 | 各级标题、题头 | **加粗黑体（SimHei）** | 加粗 Times New Roman |
-| 公式代码块 | — | Consolas 等宽（∑ 上下的求和上下限只有等宽才对得齐） |
+| 公式 | — | Chrome 的 MathML 排版（`--mathml`），数学字体由浏览器回退，无需配置 |
 
 靠的是 Chrome 逐字符解析 `font-family`：拉丁字体排在最前，ASCII 全部落到 Times，只有 CJK 码位才向后落到汉字字体。反过来把汉字字体放前面，每个数字和括号都会用上宋体那套打字机味的拉丁字形——机翻论文的「土气」多半来自这里。
 
@@ -433,28 +507,34 @@ pandoc → 自包含 HTML（图片转 data URI）→ Chrome/Edge 无头打印。
 
 ### 6.1 归档：原件和译文收进同一个「中文题目」文件夹
 
-6.0 出了 PDF 之后，**在原件（PDF 或 .docx）所在目录**新建一个文件夹，名字用**译文的中文题目**（5.1 写的那个 H1），把三样东西放进去。一篇论文一个文件夹，原件和译文在一处，以后找起来不用翻两个地方。
+6.0 出了 PDF 并通过图文检查之后，使用任务开始时记录的 `SOURCE_PARENT` 和 5.1 确认的 `ZH_TITLE` 得到 `ARCHIVE_DIR`。**不得此时根据译文、转换后的 Word 或工作副本的位置重新计算父目录。** 一篇论文一个文件夹，原件和译文放在一起。
 
 | 进文件夹 | 从哪来 | 说明 |
 |---|---|---|
-| 原文 PDF | 用户给的原件 | **移动**，不是复制——外面不再留一份，免得日后分不清哪份是原件。原件是 `.docx` 时同理 |
+| 原文 PDF | `SOURCE_INITIAL` 指向的用户原件 | 保留原文件名，**移动**，不是复制；原件是 `.docx` 时同理 |
 | `<原文标题> 中文翻译.md` | 5.4 | 图片已内嵌，自包含 |
 | `<原文标题> 中文翻译.pdf` | 6.0 | 图片已内嵌，可单独发送 |
 
 **不询问保存图集，默认不放图集。** 图已内嵌在 md 和 PDF 里：选择验证时使用通过检查的面板，跳过时使用整图；不得把未执行的面板验证写成已完成。文件名照 5.1 用原文标题，只有文件夹名用中文。
 
-**不进文件夹、归档确认后删掉的**：2.0 的 `.docx`、2.1 的 `<stem>_docx/`（含 `media/`、`content.md`、`manifest.json`）、3.0 的提取目录、4.0 的 `panels/`、5.1 的 `_figs/`、各步留下的 `.bak`、翻译草稿。它们都能由脚本重新生成，留着只会让文件夹里分不清哪份是成品——实测一个手工整理的文件夹里同时躺着两份原 PDF、`.docx`、`_docx/`、`native_extract/`、`translation_draft.md` 和 `.md.bak`。**2.0 和 2.1 默认把 `.docx` 和 `<stem>_docx/` 直接生成在原 PDF 旁边**，不清就一直留在用户的文献目录里。
+**不进交付文件夹的工作文件**：2.0 生成的 `.docx`、2.1 的 `<stem>_docx/`（含 `media/`、`content.md`、`manifest.json`）、3.0 的提取目录、4.0 的 `panels/`、5.1 的 `_figs/`、各步留下的 `.bak`、翻译草稿。用前述 `-o` 和工作路径把它们留在 `WORK_DIR`；不要省略输出参数让脚本污染原件目录。**用户提供的 `.docx` 原件不属于清理对象。**
 
 文件夹名的规则：
 
 - 取 H1 全文；超过 50 字时先去掉副标题（冒号后那段），仍超就按语义缩短，但要能认出是哪篇
 - Windows 路径不许的 `\ / : * ? " < > |` 换成全角同形字符（`：` `？` `／`），首尾的空格和句点去掉
 - 用户在请求里指定了名字就用用户的（含 `_期刊年份` 这类区分后缀）
-- **目标文件夹已存在时停下来问**：列出里面有什么，不覆盖、不删除、不另起一个带序号的
+- **目标文件夹在本次归档前已存在时停下来问**：列出里面有什么，不覆盖、不删除、不另起一个带序号的。若是本次中断后续跑，只有任务记录和文件校验均能证明它是本次已创建的目录、其中已到位文件也确属本次任务，才继续缺失步骤；否则仍询问。不能再套一层同名中文文件夹。
 
-顺序：先把三样东西移进去，逐个确认到位，**最后**才删脚手架。移动原 PDF 失败（被阅读器占用、跨盘）时如实报告并把原件留在原地，**不要复制一份了事**——那会留下两份原文。
+**实际执行，不是只描述操作计划：**
 
-交付时给用户的是这个文件夹的完整路径，不是三个文件的路径。
+1. 列出三条绝对源路径及其各自的目标路径，确认它们均为非空普通文件；源文件必须互不相同，三个目标文件名也不得冲突。记录三份源文件的 SHA256，用于移动后逐一比对。核对 `ARCHIVE_DIR` 的绝对父目录确为记录的 `SOURCE_PARENT`，排除指向别处的 symlink/junction；按宿主要求获取必要的移动确认。
+2. 按上面的重名规则检查目标目录，然后创建。先把两份已经完成检查的译文移动到目标位置，逐一核对哈希，**最后移动原件**并核对哈希。移动采用单文件、明确目标路径、不覆盖的操作；Windows 使用 `Move-Item -LiteralPath ... -Destination ... -ErrorAction Stop`，不要用 `-Force`、通配符或跨 shell 拼接命令。
+3. **重新列出 `ARCHIVE_DIR` 的实际内容**，不是打印预期路径：默认必须恰好是原件、译文 `.md` 和译文 `.pdf` 三个非空文件。逐一确认父目录均为 `ARCHIVE_DIR`、哈希与移动前相等，且 `SOURCE_INITIAL` 旧位置已不存在原件。用户明确要求额外交付物或保留原件时，仅对应检查按已记录的要求调整。
+4. 任一步失败都保留尚未移动的源文件和已经成功归档的文件，记录实际路径及失败原因，**不清理、不覆盖、不复制原件凑齐数量，也不声称已完成**。只报告“译文已生成，归档未完成”，解决阻塞后复查并继续。不要自动回滚移动，以免覆盖期间新增的文件。
+5. 三件套检查通过后，才按工作区清理规则列出仅本次产生的候选文件，获得必要确认后放入回收站。不对原件父目录执行按扩展名批量删除；用户原有文件、原件和唯一回滚资料一律不动。未获清理许可时保留工作文件并报告位置，不因此破坏已经完成的归档。
+
+**交付消息以已核验的 `ARCHIVE_DIR` 完整绝对路径为主链接**，并简短说明其中已有原件、Markdown 和译文 PDF。可以附加归档内的文件链接，但不能用工作目录或 `outputs` 中的文件链接替代归档结果。失败时报告实际状态，不把计划中的目录写成已存在。
 
 ### 7.0 完成前自检
 
@@ -476,9 +556,12 @@ pandoc → 自包含 HTML（图片转 data URI）→ Chrome/Edge 无头打印。
 - [ ] **PDF 里图紧跟在提到它的正文后面**，不是全挤在文末
 - [ ] 选择验证时面板顺序没串：`fig02_a` 配的是 2a 的图注，不是 2b 的
 - [ ] 各章节齐全（对照 text.txt，无整段遗漏）
-- [ ] **6.1 已归档**：原件所在目录下有以中文题目命名的文件夹，里面正好三样——原文 PDF、`.md`、`.pdf`；原 PDF 的旧位置已不存在该文件
-- [ ] 文件夹里和原件目录里都没有 `.docx`、`_docx/`、`media/`、`panels/`、`_figs/`、`.bak` 或草稿
-- [ ] 临时工作目录已删除
+- [ ] **路径契约已兑现**：通过文件工具检查，`ARCHIVE_DIR` 的父目录等于最初记录的 `SOURCE_PARENT`，文件夹名等于经处理的中文题目；不是根据工作副本位置推导的目录
+- [ ] **6.1 已归档且有实际证据**：重新列目录确认其中只有原件、译文 `.md` 和译文 `.pdf` 三个非空文件，三份 SHA256 与移动前相等；原件是 `.docx` 时保留该原件
+- [ ] **原件已移动**：`SOURCE_INITIAL` 旧位置已不存在文件；当前用户若明确要求其他位置或保留原件，已按记录核对对应例外
+- [ ] **交付目录无脚手架**：未混入转换 Word、提取目录、图片目录、`.bak` 或草稿；未动原件父目录中的用户原有资料
+- [ ] 工作文件已按清理规则处理，或已说明保留位置与原因；没有为清理而删除唯一恢复资料
+- [ ] 完成回复引用的是实际核验过的归档文件夹，而非工作目录；任一归档检查失败时明确报告“归档未完成”
 
 交付时一并告知用户：**译文需人工复核**，数据、单位、结论性表述尤其要对照原文，不要直接用于投稿或引用。
 
@@ -494,15 +577,20 @@ pandoc → 自包含 HTML（图片转 data URI）→ Chrome/Edge 无头打印。
 
 | 问题 | 解决 |
 |------|------|
-| `preflight.py` 报 exit 4 | 先核对解释器和缺失依赖；确认 Acrobat、RapidOCR 均不可用后，必须请求用户同意下载、安装 RapidOCR，未同意则停止；文字版 PDF 也不能绕过 |
-| `preflight.py` 说某个包 MISSING，但明明装过 | 跑的解释器不是装包那个。看报告开头的 interpreter 行，按「流程」开头那段重新定 `$PY`——有已激活的 venv 时裸 `python` 一定是 venv 那个，而 venv 默认看不见全局包 |
+| `preflight.py` 报 exit 4 | 两条路径均不可用；请求用户同意运行 `setup_ocr.py --install`，OCR 必须装到真实 Skill 的 `ocr/`；未同意则停止 |
+| OCR 明明装过，但自检报 MISSING | 全局安装不算 Skill 本地安装。核对报告的 `ocr_root`、`ocr_python`、`ocr_models`；请求同意后运行本地安装器，不搜索其他 Python |
+| `MISSING or corrupt OCR models` | 本地默认模型缺失或哈希不符；请求用户同意后重跑安装器修复，不能只创建空 `ocr/` 文件夹放行 |
 | 转换器显示 ok，verdict 里却判 UNUSABLE | 缺 lxml。`docx_extract.py` 靠它解析 .docx，`"$PY" -m pip install lxml` 即解 |
 | Acrobat 导出挂住不返回 | 独立导出进程默认 180 秒超时后回退 RapidOCR；大文件可调整 `--acrobat-timeout`。`--check` 核对 Protected Mode；若组策略锁定，不修改组策略；缺 RapidOCR 时先征得安装同意 |
 | 报「folder script not loaded」 | 装脚本时 Acrobat 没完全退出。全部关掉再跑 `--install-acrobat-js` |
+| 弹出「无法写入指定的文件」 | COM 的 `saveAs` 也会触发该弹窗。先核对实际命令、未占用的输出路径，以及更新后 `--check` 显示的真实保护模式；确认 `reg_get` / `reg_set` 使用 `StdRegProv`，不要仅凭宿主注册表中的 `0` 认定沙箱已关闭，也不要因此改成 UI 导出 |
+| `StdRegProv` 访问或恢复失败 | 保留恢复记录并检查 Windows 注册表提供程序、当前用户权限和报错；不能静默改回进程内 `winreg`，也不能永久关闭保护模式来绕过 |
+| `--check` 显示 `export script : STALE` | Acrobat 安装目录里的 `paper_translator.js` 与脚本内嵌版本不一致（多半是 Acrobat 更新覆盖了目录，或脚本改过 `JS_VERSION`）。下次导出会自动重装并弹一次 UAC；也可提前跑 `--install-acrobat-js` |
 | UAC 被拒绝，或用户不在场 | 仅在 RapidOCR 已可用时回退；否则停止并等待安装同意，不自动下载 |
 | 导出的正文句子顺序错乱 | 用成了 `--layout page`，改回默认 flowing |
 | `docx_extract.py` 报「no figure caption was extracted at all」 | 转换器把整篇图注都并进了正文。改用 `--layout page` 重导一次，或走 3.0 |
 | 报「the text refers to Fig [N], which no extracted caption covers」 | 那条图注被粘在某个正文段落尾部。`Grep` 搜 `Fig. N` 找到碎片，拼回完整图注再翻译。图片编号脚本已自动修正，无需手改 |
+| 图号图注全对、图却只有一列（四色心只剩 NV） | Acrobat 把多列图拆成了多个图片对象，2.1 校验查不出。跑 2.1.1 `crop_figures.py --compare`，FRAGMENT 的改用裁剪图 |
 | 图数量告警，但确实只有 N 张图 | 一页可能含多图。查 manifest 确认后按实际情况继续 |
 | 引用了 Supplementary Fig.17 却没这张图 | 正常，SI 是独立文件；脚本已排除 Supplementary/Extended Data |
 | PDF 里作者名大段变斜体 | 作者行的 `*` 未转义，改 `\*` |
@@ -514,7 +602,7 @@ pandoc → 自包含 HTML（图片转 data URI）→ Chrome/Edge 无头打印。
 | 切面板报 "holds [...] above its own label" | 上一面板的坐标轴标题落进了这一面板。量一下它和该标签的纵向范围：重叠就是切不了，退回整张图；不重叠才值得调 `--min-gutter` |
 | 切出来多了一块页眉 | 正常，脚本按「在首个面板标签之上」判为页面装饰并排除，不计入墨量守恒 |
 | OCR 读不出 i / l / o | 常态，note 里会写明；靠其余标签一致性背书，不算失败 |
-| 装了 rapidocr 之后 cv2 出问题 / 别的项目报 opencv 错 | 装的时候漏了 `--no-deps`，pip 把 `opencv_python` 装进来跟 `opencv-contrib-python` 争同一个 `cv2` 目录。卸掉 `opencv_python`、重装 contrib 版即可，rapidocr 用 contrib 那份完全正常 |
+| 本地 OCR 的 cv2 或 DLL 导入失败 | 按自检列出的本地依赖排查，并在用户同意后重跑 `setup_ocr.py --install`；不要卸载或替换全局 OpenCV 来修复本 Skill |
 | 想知道这次 Word 是否需要确认 | 查看同名 `.conversion.json`：`engine=acrobat` 且转换成功时不问满意度；`engine=rapidocr` 时必须问。OCR 实际后端也记在提取或面板清单的 `ocr_backend` |
 | 面板之间根本没有空白 | 并排的 force plot 一类。别硬切，退回整张图，并在交付说明里写明该图未完成面板验证 |
 | `inline_images.py` 报缺失图片或远程图片 | 检查 5.1 中的临时路径是否相对 `<译文.md>` 正确；最终交付要求所有图片都是本地资源，不能依赖远程 URL。修复后重新运行 5.4，不要先删除临时图片目录 |
@@ -532,6 +620,7 @@ pandoc → 自包含 HTML（图片转 data URI）→ Chrome/Edge 无头打印。
 | 目录页占了一整页太浪费 | 设计如此：标题页 + 目录一页，正文从下一页起。不想要就 `--no-toc` |
 | 扫描件字迹模糊 | `--dpi 300` |
 | 提取文本断行严重 | 用 PyMuPDF 提取对应页的文本块和坐标，并与原页核对 |
-| 归档时目标文件夹已存在 | 多半是同一篇翻过一次。停下来列出里面有什么再问用户：覆盖译文、换名，还是不归档；不自作主张覆盖、删除或另起带序号的文件夹 |
+| 译文生成在 `outputs` 或临时目录，原件还在外面 | 6.0 只转换、不归档。按开头记录的 `SOURCE_PARENT` 恢复正确的 `ARCHIVE_DIR`，执行 6.1 并通过 7.0；不能把 PDF 生成成功当成整个任务完成 |
+| 归档时目标文件夹已存在 | 按 6.1 区分可核验的本次续跑与历史目录。无法证明属于本次任务时列出内容并询问；不自作主张覆盖、删除、另起带序号目录或嵌套同名文件夹 |
 | 中文题目里带 `:` `?` `/` 这类字符，建文件夹报错 | Windows 不许这些字符出现在路径里，换成全角同形字符（`：` `？` `／`），见 6.1 |
-| 归档后原文 PDF 还留在外面 | 移动失败（被阅读器占用、跨盘）。关掉阅读器重试，或让用户手动移；不要复制一份进去了事 |
+| 归档后原文 PDF 还留在外面 | 除非当前用户明确要求保留原件，否则归档未完成。记录真实移动错误、保留文件，解除占用或权限阻塞后按 6.1 复查；不要复制一份进去冒充移动成功 |

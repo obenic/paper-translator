@@ -25,17 +25,14 @@ import sys
 from dataclasses import dataclass, asdict
 from typing import Dict, List, Optional
 
+import ocr_runtime
+
 HERE = os.path.dirname(os.path.abspath(__file__))
 
 CAP_CONVERTER = "Acrobat Pro"
 CAP_OCR = "RapidOCR"
 
-# RapidOCR first: same PP-OCR weights, ~40MB instead of ~1GB, and 8-19x faster
-# to start and run. onnxruntime is a separate install because RapidOCR leaves
-# the choice of execution provider to the user.
-OCR_INSTALL = ("pip install --no-deps rapidocr\n"
-               "    pip install onnxruntime shapely pyclipper omegaconf "
-               "colorlog numpy pillow requests tqdm six PyYAML python-docx")
+OCR_INSTALL = ocr_runtime.INSTALL_HINT
 
 
 @dataclass(frozen=True)
@@ -133,13 +130,9 @@ def probe_converter() -> Probe:
 
 
 def probe_ocr() -> Probe:
-    """Capability B - RapidOCR and its runtime dependencies only."""
-    return probe_module(
-        "ocr", CAP_OCR,
-        ["rapidocr", "onnxruntime", "cv2", "numpy", "PIL", "shapely",
-         "pyclipper", "omegaconf", "colorlog", "requests", "tqdm", "six", "yaml"],
-        OCR_INSTALL + "\n    install opencv-python only if cv2 is absent",
-    )
+    """Capability B - only the runtime and verified models inside this skill."""
+    ok, detail = ocr_runtime.check_local_ocr()
+    return Probe("ocr", CAP_OCR, ok, detail, "" if ok else OCR_INSTALL)
 
 
 def probe_browser() -> Probe:
@@ -214,9 +207,9 @@ def decide(probes: Dict[str, Probe]) -> int:
 def render(probes: Dict[str, Probe]) -> None:
     """Print the human report."""
     print(f"interpreter\n  {sys.executable}")
-    print("  every command below must use THIS python, or the packages it "
-          "found are not the ones\n  that will be imported at run time "
-          "(an active venv shadows a global install).")
+    print(f"skill-local OCR\n  {ocr_runtime.OCR_ROOT}")
+    print("  use the reported interpreter for every subsequent command; "
+          "global OCR packages do not count.")
 
     print("\nrequired")
     for key in ("pymupdf", "lxml", "imaging", "docx"):
@@ -255,11 +248,9 @@ def verdict(probes: Dict[str, Probe]) -> int:
               "RapidOCR\nbefore running any installation command. If consent "
               "is refused or pending,\nstop; a text-layer PDF does not bypass "
               "this requirement.\n\n"
-              f"After consent, use this interpreter:\n    {OCR_INSTALL}\n"
-              "If cv2 is absent, also install opencv-python; do not replace "
-              "an existing OpenCV package.\n\n"
-              f"Installing into a different python than\n    {sys.executable}"
-              "\nwill not help - check the interpreter line above.",
+              f"After consent, install into {ocr_runtime.OCR_ROOT}:\n"
+              f"    {OCR_INSTALL}\n"
+              "Do not install into global Python or another project's venv.",
               file=sys.stderr)
         if probes["converter"].ok and not probes["lxml"].ok:
             print("\nNote: a converter IS installed, but lxml is not, so the "
@@ -279,8 +270,10 @@ def verdict(probes: Dict[str, Probe]) -> int:
         print("  panels    : keep whole figures; label cross-validation "
               "requires RapidOCR")
     if not probes["ocr"].ok:
-        print("  fallback  : if Acrobat export fails, request consent "
-              "to install RapidOCR before continuing")
+        print("  OCR setup : request user consent to download/install "
+              f"RapidOCR into {ocr_runtime.OCR_ROOT}; {OCR_INSTALL}")
+        print("  fallback  : without local OCR, only successful Acrobat "
+              "export can continue; OCR steps must stop")
     if not probes["converter"].ok:
         print("  figures   : positions are guessed by insert_figures.py "
               "(first mention), not taken from the source layout")
@@ -305,9 +298,12 @@ def main() -> int:
         code = decide(probes)
         print(json.dumps({
             "interpreter": sys.executable,
+            "ocr_root": str(ocr_runtime.OCR_ROOT),
+            "ocr_python": str(ocr_runtime.OCR_PYTHON),
+            "ocr_models": str(ocr_runtime.MODEL_ROOT),
             "probes": {k: asdict(v) for k, v in probes.items()},
             "figure_capabilities": [p.label for p in usable_caps(probes)],
-            "requires_rapidocr_install_consent": code == 4,
+            "requires_rapidocr_install_consent": not probes["ocr"].ok,
             "exit": code,
         }, indent=2, ensure_ascii=False))
         return code
@@ -317,4 +313,5 @@ def main() -> int:
 
 
 if __name__ == "__main__":
+    ocr_runtime.relaunch_in_local_runtime(__file__)
     sys.exit(main())

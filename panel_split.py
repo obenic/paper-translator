@@ -40,6 +40,10 @@ import os
 import re
 import sys
 
+if __name__ == "__main__":
+    from ocr_runtime import relaunch_in_local_runtime
+    relaunch_in_local_runtime(__file__)
+
 import numpy as np
 
 # A pixel this far from the sampled background colour counts as ink.
@@ -1008,7 +1012,6 @@ def main():
 
 if __name__ == "__main__":
     sys.exit(main())
-
 
 
 

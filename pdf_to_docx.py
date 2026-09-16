@@ -8,7 +8,7 @@ figure extraction, no panel splitting, no relocating captions. You then
 translate the body paragraphs in place and the layout survives.
 
 Acrobat Pro is the best converter available, and this script drives it end to
-end with no clicking. Getting there took three separate fixes, because a
+end with no clicking. Getting there took four separate fixes, because a
 single misleading COM error ("not implemented") hid all of them:
 
   1. pywin32 invokes IDispatch methods with DISPATCH_METHOD|DISPATCH_PROPERTYGET.
@@ -24,6 +24,9 @@ single misleading COM error ("not implemented") hid all of them:
   3. While Protected Mode is on, saveAs neither returns nor raises: it hangs
      forever. protected_mode_off() switches it off around the export only, and
      puts it back afterwards.
+  4. A host can expose a redirected registry view: a read of 0 does not prove
+     Acrobat sees Protected Mode off. _user_registry() uses the external
+     Windows provider for both reading and writing the actual user's settings.
 
 Tested on Acrobat Pro 25.1 (Exchange-Pro), pywin32 311, Windows 11.
 
@@ -69,6 +72,10 @@ import time
 import zipfile
 from queue import Empty
 
+if __name__ == "__main__":
+    from ocr_runtime import relaunch_in_local_runtime
+    relaunch_in_local_runtime(__file__)
+
 try:
     import winreg
 except ImportError:
@@ -85,7 +92,7 @@ PRIV_KEY = DC + r"\Privileged"
 DOCX_SETTINGS = DC + r"\AVConversionFromPDF\cSettings\c1\cSettings"
 
 JS_NAME = "paper_translator.js"
-JS_VERSION = "paper-translator/4"
+JS_VERSION = "paper-translator/5"
 PM_STASH = os.path.join(tempfile.gettempdir(), "paper_translator_pm_restore")
 
 ACROBAT_JS = '''// paper-translator skill: trusted PDF -> DOCX export.
@@ -128,20 +135,57 @@ preflight.py. If consent is refused or pending, stop.
 
 # --- registry ---------------------------------------------------------------
 
-def reg_get(sub, name):
-    if winreg is None:
-        return None
+def _user_registry(method, sub, name=None, value=None):
+    """Access the current user's real Acrobat settings outside the host."""
+    if winreg is None or win32 is None:
+        raise OSError("Acrobat registry access requires Windows and pywin32")
     try:
-        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, sub) as k:
-            return winreg.QueryValueEx(k, name)[0]
-    except OSError:
+        import win32api
+        import win32con
+        import win32security
+
+        token = win32security.OpenProcessToken(
+            win32api.GetCurrentProcess(), win32con.TOKEN_QUERY)
+        try:
+            user, _ = win32security.GetTokenInformation(
+                token, win32security.TokenUser)
+            sid = win32security.ConvertSidToStringSid(user)
+        finally:
+            token.Close()
+
+        # A host's HKCU/HKU view can differ from Acrobat's for the same SID.
+        # The external Windows provider avoids that redirected registry view.
+        provider = win32.GetObject(
+            r"winmgmts:{impersonationLevel=impersonate}!\\.\root\default:StdRegProv")
+        parameters = provider.Methods_.Item(method).InParameters.SpawnInstance_()
+        # WMI takes a uint32, not a sign-extended native HKEY handle.
+        parameters.hDefKey = int(winreg.HKEY_USERS) & 0xFFFFFFFF
+        parameters.sSubKeyName = sid + "\\" + sub
+        if name is not None:
+            parameters.sValueName = name
+        if value is not None:
+            parameters.uValue = value
+        result = provider.ExecMethod_(method, parameters)
+        status = int(result.ReturnValue)
+    except Exception as exc:
+        raise OSError(f"Cannot access Acrobat's real user settings through "
+                      f"Windows StdRegProv: {exc}") from exc
+    if method == "GetDWORDValue" and status in (2, 3):
         return None
+    if status:
+        raise OSError(status, f"StdRegProv {method} failed for {sub}")
+    return int(result.uValue) if method == "GetDWORDValue" else None
+
+
+def reg_get(sub, name):
+    if winreg is None or win32 is None:
+        return None
+    return _user_registry("GetDWORDValue", sub, name)
 
 
 def reg_set(sub, name, value):
-    with winreg.CreateKeyEx(winreg.HKEY_CURRENT_USER, sub, 0,
-                            winreg.KEY_SET_VALUE) as k:
-        winreg.SetValueEx(k, name, 0, winreg.REG_DWORD, value)
+    _user_registry("CreateKey", sub)
+    _user_registry("SetDWORDValue", sub, name, value)
 
 
 def restore_stashed_protected_mode():
@@ -154,8 +198,10 @@ def restore_stashed_protected_mode():
         reg_set(PRIV_KEY, "bProtectedMode", value)
         print(f"note    : restored Protected Mode={value}, left off by an "
               f"earlier run")
-    except (OSError, ValueError):
-        pass
+    except (OSError, ValueError) as exc:
+        print(f"WARNING: could not restore Protected Mode; keeping "
+              f"{PM_STASH}: {exc}", file=sys.stderr)
+        return
     with contextlib.suppress(OSError):
         os.remove(PM_STASH)
 

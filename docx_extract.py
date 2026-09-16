@@ -68,7 +68,9 @@ def iter_live(node):
 
 CAPTION_START_RE = re.compile(
     r"^\**\s*(?:Supplementary\s+|Extended\s+Data\s+)?"
-    r"Fig(?:ure)?\.?\s*(\d{1,2})\s*[.|:｜]", re.I)
+    # Wiley sets captions as "FIGURE 1 Overview ..." - no punctuation after
+    # the number, so a following capital letter counts as the separator too.
+    r"Fig(?:ure)?\.?\s*(\d{1,2})\s*(?:[.|:｜]|\s(?=[A-Z(]))", re.I)
 REFERENCE_RE = re.compile(
     r"(Supplementary|Supp\.|Extended\s+Data|SI)?\s*\bFig(?:ure)?s?\.?\s*(\d{1,2})",
     re.I)

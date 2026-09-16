@@ -2,12 +2,14 @@ import contextlib
 import io
 import subprocess
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import preflight
+import ocr_runtime
 
 
 class PreflightTests(unittest.TestCase):
@@ -49,16 +51,31 @@ class PreflightTests(unittest.TestCase):
                 patch.object(preflight, "_progid_registered", return_value=True):
             self.assertFalse(preflight.probe_converter().ok)
 
-    def test_paddle_installation_does_not_count_as_rapidocr(self):
-        with patch.object(preflight, "_spec",
-                          side_effect=lambda name: name in {"paddleocr", "paddle"}), \
-                patch("ocr_engine.available", return_value=["PaddleOCR"]):
+    def test_unrelated_packages_do_not_count_as_local_rapidocr(self):
+        with tempfile.TemporaryDirectory() as tmp, \
+                patch.object(ocr_runtime, "OCR_PYTHON", Path(tmp) / "missing"), \
+                patch.object(preflight, "_spec", return_value=True), \
+                patch("ocr_engine.available", return_value=["unrelated-engine"]):
             self.assertFalse(preflight.probe_ocr().ok)
 
     def test_rapidocr_requires_runtime_dependencies(self):
-        with patch.object(preflight, "_spec", side_effect=lambda name: name == "rapidocr"), \
-                patch("ocr_engine.available", return_value=["RapidOCR"]):
+        with patch.object(ocr_runtime, "in_local_runtime", return_value=True), \
+                patch.object(ocr_runtime.Path, "is_file", return_value=True), \
+                patch.object(ocr_runtime.importlib, "import_module",
+                             side_effect=ImportError("onnxruntime missing")):
             self.assertFalse(preflight.probe_ocr().ok)
+
+    def test_global_packages_alone_do_not_pass_local_ocr_check(self):
+        with tempfile.TemporaryDirectory() as tmp, \
+                patch.object(ocr_runtime, "OCR_PYTHON", Path(tmp) / "missing"), \
+                patch.object(preflight, "_spec", return_value=True):
+            probe = preflight.probe_ocr()
+        self.assertFalse(probe.ok)
+        self.assertIn("ocr", probe.detail.lower())
+
+    def test_install_hint_targets_skill_setup_not_global_pip(self):
+        self.assertIn("setup_ocr.py", preflight.OCR_INSTALL)
+        self.assertIn("--install", preflight.OCR_INSTALL)
 
     def test_stop_requires_explicit_install_consent(self):
         out, err = io.StringIO(), io.StringIO()
@@ -67,7 +84,7 @@ class PreflightTests(unittest.TestCase):
         message = out.getvalue() + err.getvalue()
         self.assertIn("consent", message.lower())
         self.assertIn("RapidOCR", message)
-        self.assertNotIn("PaddleOCR", message)
+        self.assertIn(preflight.OCR_INSTALL, message)
 
     def test_obsolete_flags_are_rejected(self):
         for flag in ("--multimodal", "--allow-unverified"):

@@ -11,8 +11,9 @@ numpy>=1.24.0
 
 # 能力门禁只检查以下两项，至少一项可用，否则 preflight.py exit 4：
 #   1) pywin32 + Acrobat Pro（仅 Windows）
-#   2) RapidOCR 及其运行依赖
-# 两者都没有时，必须先征得用户同意下载、安装 RapidOCR；未同意则停止。
+#   2) Skill 内 ocr/.venv 中的 RapidOCR 及 ocr/models 中的默认模型
+# 本地 OCR 缺失时先征得用户同意，再运行 setup_ocr.py --install。
+# 全局 RapidOCR 不参与自检放行；两条路径都不可用且未同意安装则停止。
 # 不调用 Microsoft Word；DOCX 只是中间文件格式。
 #
 # Acrobat 直转 Word（pdf_to_docx.py，仅 Windows，走 Acrobat COM 接口）
@@ -20,26 +21,10 @@ numpy>=1.24.0
 # pywin32>=306
 
 # 扫描件 OCR + 面板标签校验。装 RapidOCR：https://github.com/RapidAI/RapidOCR
-# 两个后端跑的是同一套 PP-OCR 权重
-# （RapidOCR 是把百度的模型转成 ONNX，版权仍归百度），所以这不是精度取舍，
-# 而是同一个模型的两种跑法。默认流程只调用 RapidOCR。
+# 所有 OCR 只调用本 Skill 的 RapidOCR，模型使用 ONNX 格式的 PP-OCR 权重。
 #
-# 装它。约 40MB（onnxruntime 常常已被别的包带进来），
-# 实测同权重快 7.9 倍、用它更轻的默认档快 18.7 倍。
-# --no-deps 是必须的：它声明依赖 opencv_python，而多数环境装的是
-# opencv-contrib-python，两者争同一个 cv2 目录。contrib 版供的 cv2 完全够用
-# （实测换过去 6 页输出逐字一致）。
-#   pip install --no-deps rapidocr
-#   pip install onnxruntime shapely pyclipper omegaconf colorlog numpy pillow requests tqdm six PyYAML python-docx
-# cv2 缺失时另装 opencv-python；已有 cv2 则不安装或替换 OpenCV。
+# 统一入口：python "<真实 Skill 目录>/setup_ocr.py" --install
+# 安装器将 requirements-ocr.txt 装进 ocr/.venv，模型保存在 ocr/models。
+# 在隔离环境中只安装 opencv-python，不碰全局 opencv-contrib-python。
 # 实测版本 rapidocr 3.9.2 + onnxruntime 1.26.0（Python 3.13）。
 # rapidocr>=3.9
-
-# PaddleOCR：ocr_engine.py 仅保留显式兼容调用，不参与自检或默认流程。
-# 历史基准中它慢一个数量级、大一个数量级（约 1GB）、
-# 精度不占优，新装没有理由选它。
-# 实测版本 paddleocr 3.7.0 + paddlepaddle 3.3.1 (Python 3.13)。
-#   pip install paddlepaddle paddleocr
-# ocr_engine.py 内部强制 enable_mkldnn=False，绕过部分 paddle 构建的 oneDNN 崩溃。
-# paddlepaddle>=3.0
-# paddleocr>=3.0

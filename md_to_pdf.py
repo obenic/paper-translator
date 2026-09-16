@@ -131,9 +131,9 @@ th {{ background: #eef0f3; font-family: {head_font}; }}
 
 code {{ font-family: Consolas, "Courier New", monospace; font-size: 9pt;
        background: #f0f1f3; padding: .1em .35em; border-radius: 3px; }}
-/* Fenced blocks stay monospace even though the body is Times: this skill
-   writes display formulas as ASCII art, and the sum limits above and below
-   the ∑ only line up in a fixed-width face. */
+/* Fenced blocks stay monospace even though the body is Times. Display
+   formulas are NOT written here any more: they are LaTeX, rendered by
+   pandoc --mathml (Chrome lays MathML out natively). */
 pre {{ background: #f6f7f9; padding: .8em; overflow-x: auto;
       border-radius: 4px; break-inside: avoid; }}
 pre code {{ background: none; padding: 0; }}
@@ -350,6 +350,7 @@ def main():
     cmd = [
         "pandoc", str(src), "-f", "gfm+implicit_figures", "-t", "html5",
         "--standalone", "--embed-resources", "--css", str(css_file),
+        "--mathml",
         "--metadata", f"pagetitle={md.stem}",
         "--resource-path", str(md.parent),
         "-o", str(html),

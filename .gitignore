@@ -2,6 +2,9 @@
 __pycache__/
 *.py[cod]
 
+# Skill-local OCR runtime and downloaded model weights (rebuild with setup_ocr.py).
+ocr/
+
 # Extraction / render artifacts
 *_extract/
 figures/

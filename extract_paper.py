@@ -23,8 +23,8 @@ Figure detection covers three cases the text layer misses:
 
 Scanned PDFs (no text layer):
     --ocr           OCR rendered pages with RapidOCR.
-                    Requires: pip install --no-deps rapidocr
-                              pip install onnxruntime shapely pyclipper omegaconf colorlog
+                    Requires skill-local OCR: setup_ocr.py --install
+                    (run setup only after explicit user consent).
                     Without this flag, scanned PDFs stop with exit 4.
 
 Completeness check: the body text is scanned for figure references
@@ -685,4 +685,6 @@ def main():
 
 
 if __name__ == "__main__":
+    from ocr_runtime import relaunch_in_local_runtime
+    relaunch_in_local_runtime(__file__)
     sys.exit(main())

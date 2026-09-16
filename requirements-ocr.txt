@@ -1,0 +1,6 @@
+# Install only into this skill's ocr/.venv via setup_ocr.py --install.
+-r requirements.txt
+rapidocr==3.9.2
+onnxruntime==1.26.0
+opencv-python==4.10.0.84
+pywin32>=306; sys_platform == "win32"

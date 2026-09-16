@@ -14,9 +14,13 @@
 
 蓝色是处理步骤，黄色菱形是分支，绿色是输入与交付，红色是停止或等待。**OCR 重建 Word 的满意度必须由用户确认，Acrobat 成功直转不问满意度。** 任何一处 `exit 3` 没查证就不许往下走。
 
-**`1.0 preflight.py` 是第一条命令**，能力只检查 Acrobat Pro、RapidOCR。两者都不可用时必须先征得用户同意下载、安装 RapidOCR；拒绝或未回答则停止，即使 PDF 有文本层也不能绕过。
+**`1.0 preflight.py` 是第一条命令**，能力只检查 Acrobat Pro、Skill 本地 RapidOCR。
+2026-09-15 起，OCR 程序和依赖固定放在真实 Skill 的 `ocr/.venv`，模型放在 `ocr/models`。
+不认可全局 Python 或其他项目内的 OCR。缺失时请求用户同意下载到本 Skill；两条路径都不可用且拒绝或未回答时停止。
 
-主干是：**检查环境 → Acrobat 直转或 RapidOCR 识别 → 核对正文与插图 → 翻译 → 排版与自检 → 交付 Markdown + PDF**。图中只展示主要流程，具体命令见下文及 `SKILL.md`。图片交叉验证与图集保存是不同事项，不保存图集不等于不插图。
+主干是：**记录原件位置 → 检查环境 → Acrobat 直转或 RapidOCR 识别 → 核对正文与插图 → 翻译 → 排版与自检 → 将原件 + Markdown + 译文 PDF 归档并核验 → 交付文件夹**。图中只展示主要流程，具体命令见下文及 `SKILL.md`。图片交叉验证与图集保存是不同事项，不保存图集不等于不插图。
+
+**交付位置固定为 `原件最初所在目录 / 文献中文题目 /`**，除非当前用户明确指定其他位置。`D:\codex\outputs` 的通用默认路径不适用于本任务，工作副本的目录也不能替代原件位置。默认将原件移动进去，保持原文件名；另外两份文件命名为 `<原文标题> 中文翻译.md` 和 `<原文标题> 中文翻译.pdf`。`md_to_pdf.py` 只转换、不归档，成功后必须执行 `SKILL.md` 的 6.1 和 7.0，实际核对三件套与路径，才能宣布完成。冲突、续跑和移动失败处理统一以 `SKILL.md` 开头的「交付路径契约」及 6.1 为准。
 
 > 图源文件 [docs/pipeline.drawio](docs/pipeline.drawio)，用 draw.io 打开可改。
 
@@ -63,23 +67,22 @@
 >
 > 按下文「安装」直接 `git clone` 到 `~/.claude/skills/paper-translator` 的标准装法不受影响，那行检查会静默通过。
 >
-> **第二行：`$PY` —— 用哪个解释器。** 本文所有 `python` / `pip` 命令统一走 `$PY`，因为**裸 `python` 指向谁由 PATH 说了算，不由你说了算**：
+> **第二行：`$PY` —— 固定使用 Skill 内的解释器。** Codex 本机的真实目录为
+> `D:\skills\paper-translator`，C 盘注册入口不存放脚本或 OCR。
 >
-> ```bash
-> PY=python                                  # 多数情况够用
-> echo "${VIRTUAL_ENV:-<none>}"              # 有值 = 当前在 venv 里，裸 python 就是 venv 那个
+> ```powershell
+> $SK = 'D:\skills\paper-translator'
+> $PY = Join-Path $SK 'ocr\.venv\Scripts\python.exe'
+> if (-not (Test-Path -LiteralPath $PY)) { $PY = 'python' }
+> & $PY "$SK\preflight.py" --json
 > ```
 >
-> `$VIRTUAL_ENV` 打印出路径时**先别信裸 `python`**。venv 默认 `include-system-site-packages = false`，全局装的包它一个都看不到——于是 `preflight.py` 把依赖全报成 MISSING、甚至直接 exit 4，**而你明明装过**。这种误判和「真的没装」长得一模一样，很容易顺着报告再装一遍。列出候选解释器换一个：
+> macOS / Linux 使用 `PY="$SK/ocr/.venv/bin/python"`；未安装时仅用系统 Python
+> 运行自检或安装器。**不再扫描其他解释器，不把全局已安装等同于本 Skill 已就绪。**
 >
-> ```bash
-> py -0p                          # Windows：列出所有注册的解释器，带 * 的是当前
-> which -a python python3         # macOS / Linux
-> ```
->
-> **判据只有一个：拿它跑 `preflight.py`，报告干净就是它。** 别拿「import 某个包成功」代替——venv 里往往恰好有 PyMuPDF 而缺 lxml/pywin32/rapidocr，单包探针会给你一个假的通过。定下来之后每条命令都用同一个，`preflight.py` 报告开头的 interpreter 行就是给你核对这件事的。
->
-> **PowerShell 写法不一样**：`$PY = "python"`，调用时前面要加调用运算符 `&`（`& $PY preflight.py`）。`$PY` 存的是命令名，不加 `&` 只会把这行当字符串打印出来。
+> 自检与四个 OCR 命令行入口会自动切换到已存在的本地解释器，其他脚本使用报告中的
+> `interpreter`。检查 `probes.ocr.ok` 及 `ocr_root`、`ocr_python`、`ocr_models`；
+> 自检退出码 0 可能仅表示 Acrobat 可用。只存在 `ocr/` 空文件夹不能通过自检。
 
 ---
 
@@ -107,20 +110,22 @@
 > | **Acrobat Pro**（Windows） | 直接将 PDF 转 Word；成功后不问满意度 | 回退 RapidOCR 重建 Word |
 > | **[RapidOCR](https://github.com/RapidAI/RapidOCR)** | 识别后重建可编辑 Word，必须询问满意度；还可验证面板标签 | Acrobat 仍可直转，但标签交叉验证需要先补齐 RapidOCR |
 >
-> **Word、PaddleOCR 不参与门禁放行。** 两条路径均不可用时，先排除解释器或依赖错误，再请求用户同意下载 RapidOCR、依赖和首次运行所需权重。未获得同意不得安装或继续；没有绕过参数。
+> **只有本 Skill 内的 RapidOCR 满足 OCR 门禁。** Word 或全局安装均不算；本地 OCR 不可用时，
+> 请求用户同意下载或修复 RapidOCR、依赖和模型到 `<真实 Skill 目录>/ocr`。
+> 两条路径均不可用且未获得同意时不得安装或继续；没有绕过参数。
 >
-> **用户明确同意后**，在同一解释器内安装：
+> **用户明确同意后**，统一使用本地安装器：
 >
-> ```bash
-> "$PY" -m pip install --no-deps rapidocr                                   # -m pip 保证装进 $PY
-> "$PY" -m pip install onnxruntime shapely pyclipper omegaconf colorlog numpy pillow requests tqdm six PyYAML python-docx
+> ```powershell
+> python "$SK\setup_ocr.py" --install
+> if ($LASTEXITCODE -ne 0) { throw 'OCR 安装失败' }
+> $PY = Join-Path $SK 'ocr\.venv\Scripts\python.exe'
+> & $PY "$SK\preflight.py" --json
 > ```
 >
-> **`--no-deps` 不能省**，理由见下面「依赖」一节的 OCR 说明。
->
-> 下载量取决于已有依赖和权重缓存。只有 `cv2` 不存在时才另装 `opencv-python`，不要覆盖已有 OpenCV。安装后重跑自检，不能把安装命令成功当成整条流程已验证。
->
-> 补一句：**venv 会骗你。** 包装在全局、命令跑在 venv 里，`preflight.py` 报一串 MISSING、甚至直接 exit 4——**这时候先别急着装，回上面那个 🚨 块把 `$PY` 指对**。报告开头那行解释器路径就是给你核对这件事用的，后面每条命令都得用同一个。
+> 安装器创建隔离环境、安装依赖、复用已有默认模型，并下载缺失模型到 `ocr/models`。
+> 不带 `--install` 不安装。自检本身不下载，也不启动 OCR 引擎；它验证本地包来源、
+> 依赖导入和默认模型 SHA256。全局安装保留，不会被移动或卸载。
 >
 > ---
 >
@@ -253,41 +258,19 @@ weakly allowed due to ┆ transitions22,23. Notably, ┆ orbital angular momentu
 
 两条能力路径至少一条可用，否则 `preflight.py` exit 4。必须先征得用户同意安装 RapidOCR，未同意则停止；文字版 PDF 也不能绕过。
 
-**OCR 说明：装 [RapidOCR](https://github.com/RapidAI/RapidOCR)。**
+**OCR 只使用本 Skill 内的 [RapidOCR](https://github.com/RapidAI/RapidOCR)。**
 
-- **它跑的就是 PaddleOCR 那套模型。** RapidOCR 把百度的 PP-OCR 模型转成了 ONNX
-  （它自己的 README 写着 “The copyright of the OCR model is held by Baidu”），
-  所以**换过来不是精度取舍**，是同一套权重换个推理框架跑
-- **实测差距全在工程层。** 同机、同图、两组独立素材：
-
-  | 素材 | | 启动 | 每页 | 总计 | 精度 |
-  |---|---|---|---|---|---|
-  | 6 张论文插图<br>（PP-OCRv6_medium 同权重） | PaddleOCR | 7.4 s | 16.2 s | 104.7 s | — |
-  | | RapidOCR | 1.0 s | 2.0 s | **13.2 s（7.9×）** | — |
-  | | RapidOCR 默认档（v6 small） | 1.1 s | 0.76 s | **5.6 s（18.7×）** | — |
-  | 一篇 9 页论文整页 OCR<br>（真值 = PDF 自带文本层） | PaddleOCR | 6.4 s | 96.7 s | 876.7 s | 召回 99.3% / 精确 98.2% |
-  | | RapidOCR | 0.9 s | 3.3 s | **30.8 s（28.5×）** | **召回 99.3% / 精确 98.4%** |
-
-  整页比插图差距更大，原因清楚：整页有 178 个文本框、插图只有 25 个，而 PaddleOCR 的开销按框累加。
-  **越接近真实扫描件，差距越明显。**
-- **体积 40MB 对 1GB。** 卸掉 paddle 系（`paddlepaddle` + `paddleocr` + `paddlex` + `~/.paddlex`
-  模型缓存）实测腾出 **546MB**，还顺带解开了 `paddlex` 对 `numpy<2.4` 的 pin
-- **默认用 small 档不是省事，是实测更稳**：面板标签这项——`panel_split.py` 全靠它校验切分——
-  small 在 6 张图上与 PaddleOCR 逐页一致，而 medium 把其中一张的 `(b)` 读成了 `(q)`。
-  更大的模型在「从图里挑单个字母」这件事上并不自动更好
-- **旋转文本上 RapidOCR 反而更好**：它默认开着方向分类，PaddleOCR 那侧被本 skill 明确关掉了。
-  两篇不同论文上都复现：竖排纵轴 “Intensity (arb. u.)” RapidOCR 读得出，PaddleOCR 给 `nteit.u.`、
-  或整篇漏掉 `intensity`×6 / `arb`×6
-- **`--no-deps` 不能省。** `rapidocr` 声明依赖 `opencv_python`，而很多环境装的是
-  `opencv-contrib-python`——pip 视为两个包，但它们争同一个 `cv2` 目录，直接装会互相覆盖。
-  contrib 版提供的 `cv2` 完全够用：实测把 `opencv_python 5.0` 换成 `opencv-contrib-python 4.10`
-  之后，6 页输出**逐字一致**、速度不变
-- 用法：提取时加 `--ocr`；对文字型 PDF 加了也会被自动忽略，不会白跑。
-  实际用了哪个后端，看 `manifest.json` 的 `ocr_backend`
-- 实测版本：`rapidocr 3.9.2` + `onnxruntime 1.26.0` + Python 3.13
-- 想自己比一遍：`"$PY" ocr_engine.py <图片>`，它把装了的后端各跑一次并列出结果
-
-**已装 PaddleOCR 不需要卸载**，但它不参与自检和默认流程。`ocr_engine.py` 保留旧适配代码供显式比较，正文 OCR 和面板校验固定使用 RapidOCR。
+- 扫描页重建、正文识别、面板标签校验和诊断命令都只调用 RapidOCR，
+  没有其他引擎的自动切换或兼容入口。
+- 默认模型为 ONNX 格式的 PP-OCRv6 small 检测、识别模型及方向分类模型，
+  保存在 `ocr/models`；自检验证本地依赖来源及三个模型的 SHA256。
+- 先征得用户同意，再运行 `setup_ocr.py --install`。依赖安装到 `ocr/.venv`，
+  不修改全局 Python；本地环境只安装一种 OpenCV。
+- RapidOCR 缺失、损坏或初始化失败时停止 OCR，报告本地修复命令。
+  不能改用其他环境继续；诊断命令初始化失败时返回非零退出码。
+- 提取扫描件时加 `--ocr`，识别来源记录为 `ocr_backend=RapidOCR`。
+  图片诊断：`"$PY" "$SK/ocr_engine.py" <图片>`。
+- 已验证版本：`rapidocr 3.9.2` + `onnxruntime 1.26.0` + Python 3.13。
 
 **不需要 LaTeX**。只翻译、不导出 PDF 的话，pandoc 和浏览器可以不装。
 
@@ -303,38 +286,30 @@ Skill 目录结构与仓库根目录一致，直接 clone 到 skills 目录即�
 git clone https://github.com/obenic/paper-translator.git \
   ~/.claude/skills/paper-translator
 
-PY=python                       # 在 venv 里就换成真正要用的解释器，见顶部 🚨
-"$PY" -m pip install pymupdf lxml pillow numpy python-docx
-
-# 非 Windows 上 Acrobat COM 不可用，必须先同意安装 RapidOCR 才继续：
-"$PY" -m pip install --no-deps rapidocr
-"$PY" -m pip install onnxruntime shapely pyclipper omegaconf colorlog numpy pillow requests tqdm six PyYAML python-docx
-
-"$PY" ~/.claude/skills/paper-translator/preflight.py       # 最后跑一次确认
+SK=~/.claude/skills/paper-translator
+# 必须先取得用户下载并安装 OCR 的同意：
+python3 "$SK/setup_ocr.py" --install || exit 1
+PY="$SK/ocr/.venv/bin/python"
+"$PY" "$SK/preflight.py" --json
 ```
 
 **Windows (PowerShell)**
 
 ```powershell
-git clone https://github.com/obenic/paper-translator.git `
-  "$env:USERPROFILE\.claude\skills\paper-translator"
-
-$PY = "python"                  # 在 venv 里就换成真正要用的解释器，见顶部 🚨
-& $PY -m pip install pymupdf lxml pillow numpy python-docx
-
-# Acrobat Pro 全自动导出（首选第一步，见上文）
-& $PY -m pip install pywin32
-
-# 没有可用 Acrobat 或 RapidOCR 时，先征得用户安装同意再执行
-& $PY -m pip install --no-deps rapidocr
-& $PY -m pip install onnxruntime shapely pyclipper omegaconf colorlog numpy pillow requests tqdm six PyYAML python-docx
-
-& $PY "$env:USERPROFILE\.claude\skills\paper-translator\preflight.py"
+$SK = 'D:\skills\paper-translator'  # 放着脚本的真实目录，不是 Slash 注册入口
+Get-Item -LiteralPath "$SK\setup_ocr.py"
+# 先征得用户同意下载到此 Skill，再执行：
+python "$SK\setup_ocr.py" --install
+if ($LASTEXITCODE -ne 0) { throw 'OCR 安装失败' }
+$PY = Join-Path $SK 'ocr\.venv\Scripts\python.exe'
+& $PY "$SK\preflight.py" --json
 ```
 
 装在 `~/.claude/skills/` 下是**全局生效**（任何目录都能用）；只想在某个项目里用就放到该项目的 `.claude/skills/` 下——**这种装法要按顶部警告把 `$SK` 改成该项目里的实际路径**。
 
-**最后那行 `preflight.py` 不要省。** 它确认 Acrobat Pro 或 RapidOCR 至少一项可用，以及 **pip 到底装进了哪个解释器**。报告开头的 interpreter 行必须和 `$PY` 是同一个。
+**最后那行 `preflight.py` 不要省。** 确认 `probes.ocr.ok=true`，且报告的解释器、
+程序和模型路径全部在真实 Skill 内。`ocr/` 不纳入 Git；更新脚本不会上传本机依赖或权重。
+换机器或移动 Skill 后需重建虚拟环境，不能直接把虚拟环境当便携软件复制使用。
 
 装好后新开一个 Claude Code 会话，说「翻译这篇文献」即可。
 
@@ -359,7 +334,7 @@ $PY = "python"                  # 在 venv 里就换成真正要用的解释器�
 └── <原文标题> 中文翻译.pdf     # 图片已内嵌，可单独发送；标题页下方是目录页，侧边栏有书签树
 ```
 
-不放图集：图已经在 md 和 PDF 里、且在原文对应的位置。`.docx`、`_docx/`、`media/`、`panels/`、`_figs/`、`.bak` 这些脚手架归档确认后删除，不进文件夹。
+不放图集：图已经在 md 和 PDF 里、且在原文对应的位置。转换生成的 `.docx`、`_docx/`、`media/`、`panels/`、`_figs/`、`.bak` 等脚手架不进交付文件夹，归档确认后按 `SKILL.md` 6.1 的清理规则处理；用户提供的 `.docx` 原件必须保留并归档，不能当脚手架删除。
 
 ### 翻译规范
 
@@ -581,7 +556,7 @@ OK: figure count consistent with text references.
 "$PY" inline_images.py <译文.md>
 ```
 
-5.2 归位完成后运行。脚本把本地 `![...](路径)` 改成 `![...](data:image/...;base64,...)`，保留原来的正文位置和图注，并留下 `.bak`。成功后 Markdown 不再依赖同级图片目录；确认 5.4 和 6.0 都成功后进入 6.1 归档，归档确认后再删除临时的 `panels/`、`_figs/`、`media/` 及本次流程产生的 `.bak`。退出码 `3` 表示有缺失图片或远程图片，不能直接交付。
+5.2 归位完成后运行。脚本把本地 `![...](路径)` 改成 `![...](data:image/...;base64,...)`，保留原来的正文位置和图注，并留下 `.bak`。成功后 Markdown 不再依赖同级图片目录；确认 5.4 和 6.0 都成功后进入 6.1 归档，再按其中的清理规则处理临时的 `panels/`、`_figs/`、`media/` 及本次流程产生的 `.bak`。退出码 `3` 表示有缺失图片或远程图片，不能直接交付。
 
 ### `md_to_pdf.py` — Markdown 转 PDF（6.0）
 
