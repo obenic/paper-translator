@@ -14,13 +14,13 @@
 
 蓝色是处理步骤，黄色菱形是分支，绿色是输入和交付，红色是停下或等人。**OCR 重建出来的 Word 好不好，得用户亲口确认；Acrobat 顺利直转的，不拿满意度去打扰人。** 任何一处冒出 `exit 3`，没查清楚之前别往下走。
 
-**第一条命令永远是 `1.0 preflight.py`**，能力只看两样：Acrobat Pro，和 Skill 自带的本地 RapidOCR。
+**第一条命令永远是环境自检（1.0）**，能力只看两样：Acrobat Pro，和 Skill 自带的本地 RapidOCR。
 从 2026-09-15 起，OCR 程序和依赖固定住在真实 Skill 目录的 `ocr/.venv` 里，模型放在 `ocr/models`。
 全局 Python 或别的项目里装的 OCR 一概不认。缺了就先问用户同不同意下载到本 Skill；两条路都走不通、用户又拒绝或者没回话，就到此为止。
 
-主干一句话：**记下原件在哪 → 检查环境 → Acrobat 直转或 RapidOCR 识别 → 核对正文和插图 → 翻译 → 排版并自检 → 把原件 + Markdown + 译文 PDF 归档并核验 → 交付文件夹**。图里只画了主干，具体命令看下文和 `SKILL.md`。顺带澄清一个容易混的点：图片交叉验证和保存图集是两码事——不存图集，不代表译文里不放图。
+主干一句话：**记下原件在哪 → 检查环境 → Acrobat 直转或 RapidOCR 识别 → 核对正文和插图 → 翻译 → 排版并自检 → 核验译文里的图还在不在原文的位置 → 把原件 + Markdown + 译文 PDF 归档并核验 → 交付文件夹**。图里只画了主干，具体命令看下文和 `SKILL.md`。顺带澄清一个容易混的点：图片交叉验证和保存图集是两码事——不存图集，不代表译文里不放图。
 
-**交付位置固定是 `原件最初所在目录 / 文献中文题目 /`**，除非当前用户明确说要放别处。`D:\codex\outputs` 那个通用默认路径在这里不适用，工作副本所在的目录也不能冒充原件位置。默认会把原件移进去，文件名不变；另外两份分别叫 `<原文标题> 中文翻译.md` 和 `<原文标题> 中文翻译.pdf`。注意 `md_to_pdf.py` 只管转换、不管归档——它跑成功之后，还得按 `SKILL.md` 的 6.1 和 7.0 走完，亲手核对三件套和路径，才算真的完事。碰上重名冲突、续跑、移动失败这些情况，一律以 `SKILL.md` 开头的「交付路径契约」和 6.1 为准。
+**交付位置固定是 `原件最初所在目录 / 文献中文题目 /`**，除非当前用户明确说要放别处。`D:\codex\outputs` 那个通用默认路径在这里不适用，工作副本所在的目录也不能冒充原件位置。默认会把原件移进去，文件名不变；另外两份分别叫 `<原文标题> 中文翻译.md` 和 `<原文标题> 中文翻译.pdf`。注意转 PDF 那一步只管转换、不管归档——它跑成功之后，还得按 `SKILL.md` 的 6.1 和 7.0 走完，亲手核对三件套和路径，才算真的完事。碰上重名冲突、续跑、移动失败这些情况，一律以 `SKILL.md` 开头的「交付路径契约」和 6.1 为准。
 
 > 图的源文件是 [docs/pipeline.drawio](docs/pipeline.drawio)，拿 draw.io 打开就能改。
 
@@ -41,14 +41,14 @@
 > 开发过程中还顺手测出几个真 bug，都修掉了：图注被转换器粘进正文时，之后所有图的编号会整体错位一号；「一条图注都没抽到」曾经被静默判为通过；Windows 下中文路径和编码引发了好几处静默失败。**没测过就不敢说能用**——这条底线好歹守住了。
 >
 > 后来又拿两篇真论文（Small 2024 单栏、Adv. Funct. Mater. 2026 十九页双栏综述）跑了一遍全流程，当场又揪出两个同类的静默失败，都已修好：
-> - **`insert_figures.py` 把「零张图」判成了成功。** 译文文件名带圆括号（`Small (2024)`）时，`![...](路径)` 的路径匹配碰到路径里那个 `)` 就停了，整行不再被当成图片行 → 收集到 0 个图块 → 报告为空 → 打印「每张图都归位了」，而实际上六张图一张都没动。现在遇到这种情况会 exit 3，并直接点出是圆括号惹的祸
+> - **负责图归位的那一步把「零张图」判成了成功。** 译文文件名带圆括号（`Small (2024)`）时，`![...](路径)` 的路径匹配碰到路径里那个 `)` 就停了，整行不再被当成图片行 → 收集到 0 个图块 → 报告为空 → 打印「每张图都归位了」，而实际上六张图一张都没动。现在遇到这种情况会 exit 3，并直接点出是圆括号惹的祸
 > - **宽横幅 logo 钻了尺寸判据的空子。** 原先只按「远小于中位数」来滤掉页面装饰，而 Wiley 那篇的 `ADVANCED SCIENCE NEWS` 横幅是 2933×676——全篇**最大**的一张图，于是它抢走了图 1 的位置，后面每张图都错位一号。现在加了形状判据：第一条图注之前、长宽比 ≥ 3 的一律判为装饰（阈值取自 18 张真图的实测，最扁的一张是 2.33）
 
 ---
 
 > ### 🚨 装完先跑这两行，不然命令要么报「找不到文件」，要么刷出一串 MISSING
 >
-> **第一行：`$SK` —— 脚本到底在哪。** `SKILL.md` 里所有脚本都通过 `$SK` 调用，默认值是 `~/.claude/skills/paper-translator`。**前提是那儿真的有 `.py`。**
+> **第一行：`$SK` —— 脚本到底在哪。** `SKILL.md` 里所有命令都通过 `$SK` 调用，默认值是 `~/.claude/skills/paper-translator`。**前提是那儿真的有脚本文件。**
 >
 > ```bash
 > SK=~/.claude/skills/paper-translator
@@ -61,7 +61,7 @@
 > - 用 symlink / junction 指了过去
 > - 走插件方式安装，实际落在了 `~/.claude/plugins/` 下
 >
-> **改法很简单：把 `$SK` 换成真正放着 `.py` 的那个目录**，其余命令一个字都不用动。桩文件正文里一般会写明真实路径。
+> **改法很简单：把 `$SK` 换成真正放着脚本的那个目录**，其余命令一个字都不用动。桩文件正文里一般会写明真实路径。
 >
 > 用桩方案的话，改了 `description` 要重新生成桩，不然模型读到的还是旧描述——详见下文「触发方式」。
 >
@@ -74,7 +74,7 @@
 > $SK = 'D:\skills\paper-translator'
 > $PY = Join-Path $SK 'ocr\.venv\Scripts\python.exe'
 > if (-not (Test-Path -LiteralPath $PY)) { $PY = 'python' }
-> & $PY "$SK\preflight.py" --json
+> & $PY "$SK\<自检脚本名>.py" --json
 > ```
 >
 > macOS / Linux 用 `PY="$SK/ocr/.venv/bin/python"`；还没装的时候，系统 Python 只拿来跑自检或安装器。
@@ -96,11 +96,11 @@
 >
 > **两样都没有就停下，先问用户同不同意下载、安装 RapidOCR。**
 >
-> 装完先跑一下自检，它会当场告诉你这台机器到底能干什么：
+> 装完先跑一下自检，它会当场告诉你这台机器到底能干什么（`<自检脚本>` 就是第一章「环境自检」里那一个）：
 >
 > ```bash
-> "$PY" preflight.py
-> "$PY" preflight.py --json
+> "$PY" "$SK"/<自检脚本名>.py
+> "$PY" "$SK"/<自检脚本名>.py --json
 > ```
 >
 > 两条路径各管一摊：
@@ -117,10 +117,10 @@
 > **用户点头之后**，统一用本地安装器：
 >
 > ```powershell
-> python "$SK\setup_ocr.py" --install
+> python "$SK\<OCR 安装器名>.py" --install
 > if ($LASTEXITCODE -ne 0) { throw 'OCR 安装失败' }
 > $PY = Join-Path $SK 'ocr\.venv\Scripts\python.exe'
-> & $PY "$SK\preflight.py" --json
+> & $PY "$SK\<环境自检名>.py" --json
 > ```
 >
 > 安装器会建一个隔离环境、装好依赖、复用已有的默认模型，缺的模型再下载到 `ocr/models`。
@@ -201,9 +201,9 @@ weakly allowed due to ┆ transitions22,23. Notably, ┆ orbital angular momentu
 **Acrobat Pro 导出全程自动**，质量也最好。唯一要人动手的，是**首次运行时批准一次 UAC**（把受信任脚本写进 Acrobat 安装目录）；批准一次永久有效，之后再没有任何交互：
 
 ```powershell
-& $PY pdf_to_docx.py <pdf> -o <work>/source.docx  # Acrobat -> RapidOCR
-& $PY pdf_to_docx.py --check                # 看本机准备好了没
-& $PY pdf_to_docx.py --install-acrobat-js   # 单独装受信任脚本
+& $PY "$SK"/<文件名>.py <pdf> -o <work>/source.docx  # Acrobat -> RapidOCR
+& $PY "$SK"/<文件名>.py --check                # 看本机准备好了没
+& $PY "$SK"/<文件名>.py --install-acrobat-js   # 单独装受信任脚本
 ```
 
 **导出要选「Retain Flowing Text」，别选「Retain Page Layout」**（脚本默认就是前者，`--layout page` 可以切过去）。这一点跟直觉是反着的：Page Layout 会把每一块按视觉位置钉死，正文被拆成上百个文本框、每段还写两遍（DrawingML + VML），**句子顺序也会跨块乱掉**——实测同一句被搅成「weakly allowed due to ┆ transitions22,23. Notably, ┆ orbital angular momentum mixing」，拿这种东西去翻译，大概率要出错。Flowing Text 能保住阅读顺序、标题层级和分段，图也照样嵌在正文原位。
@@ -243,7 +243,7 @@ weakly allowed due to ┆ transitions22,23. Notably, ┆ orbital angular momentu
 
 ## 依赖
 
-装完先跑 `"$PY" preflight.py`，它会把下面这张表在你机器上的真实状态打出来，跑不动的组合当场拦下。
+装完先跑一次环境自检（1.0），它会把下面这张表在你机器上的真实状态打出来，跑不动的组合当场拦下。
 
 | 用途 | 依赖 | 安装 | 必需性 |
 |---|---|---|---|
@@ -256,7 +256,7 @@ weakly allowed due to ┆ transitions22,23. Notably, ┆ orbital angular momentu
 | Markdown → HTML | pandoc ≥ 3.0 | [pandoc.org/installing](https://pandoc.org/installing.html) | 只影响 PDF 输出 |
 | HTML → PDF | Chrome 或 Edge | 大多数系统自带 | 只影响 PDF 输出 |
 
-两条能力路径至少得有一条能用，否则 `preflight.py` exit 4。这时必须先征得用户同意安装 RapidOCR，不同意就停；哪怕是文字版 PDF 也绕不过去。
+两条能力路径至少得有一条能用，否则环境自检（1.0）exit 4。这时必须先征得用户同意安装 RapidOCR，不同意就停；哪怕是文字版 PDF 也绕不过去。
 
 **OCR 只认本 Skill 里的 [RapidOCR](https://github.com/RapidAI/RapidOCR)。**
 
@@ -264,12 +264,12 @@ weakly allowed due to ┆ transitions22,23. Notably, ┆ orbital angular momentu
   不存在自动切换到别的引擎、或者留个兼容入口这回事。
 - 默认模型是 ONNX 格式的 PP-OCRv6 small 检测模型、识别模型和方向分类模型，
   放在 `ocr/models`；自检会核对本地依赖的来源，以及这三个模型的 SHA256。
-- 先征得用户同意，再跑 `setup_ocr.py --install`。依赖装进 `ocr/.venv`，
+- 先征得用户同意，再跑本地 OCR 安装器（`<真实 Skill 目录>` 下的那个安装脚本）。依赖装进 `ocr/.venv`，
   不碰全局 Python；本地环境里只装一种 OpenCV。
 - RapidOCR 缺失、损坏或初始化失败时，OCR 就此停下，并报出本地修复命令。
   不能换个环境接着跑；诊断命令初始化失败会返回非零退出码。
 - 提取扫描件时加 `--ocr`，识别来源会记为 `ocr_backend=RapidOCR`。
-  想单独诊断一张图：`"$PY" "$SK/ocr_engine.py" <图片>`。
+  想单独诊断一张图：`"$PY" "$SK/<OCR 诊断脚本名>.py" <图片>`。
 - 已验证的版本组合：`rapidocr 3.9.2` + `onnxruntime 1.26.0` + Python 3.13。
 
 **不需要 LaTeX**。如果只翻译、不导出 PDF，pandoc 和浏览器都可以不装。
@@ -287,27 +287,30 @@ git clone https://github.com/obenic/paper-translator.git \
   ~/.claude/skills/paper-translator
 
 SK=~/.claude/skills/paper-translator
+ls "$SK"/*.py || exit 1          # 先确认脚本真在这儿
 # 必须先取得用户下载并安装 OCR 的同意：
-python3 "$SK/setup_ocr.py" --install || exit 1
+python3 "$SK/<OCR 安装器名>.py" --install || exit 1
 PY="$SK/ocr/.venv/bin/python"
-"$PY" "$SK/preflight.py" --json
+"$PY" "$SK/<环境自检名>.py" --json
 ```
 
 **Windows (PowerShell)**
 
 ```powershell
 $SK = 'D:\skills\paper-translator'  # 放着脚本的真实目录，不是 Slash 注册入口
-Get-Item -LiteralPath "$SK\setup_ocr.py"
+ls "$SK\*.py"                      # 先确认脚本真在这儿
 # 先征得用户同意下载到此 Skill，再执行：
-python "$SK\setup_ocr.py" --install
+python "$SK\<OCR 安装器名>.py" --install
 if ($LASTEXITCODE -ne 0) { throw 'OCR 安装失败' }
 $PY = Join-Path $SK 'ocr\.venv\Scripts\python.exe'
-& $PY "$SK\preflight.py" --json
+& $PY "$SK\<环境自检名>.py" --json
 ```
+
+> 上面两处 `<...名>` 是占位符，替换成 `ls` 列出来的对应文件即可（一个是本地 OCR 安装器，一个是环境自检）。本文其余命令同理，统一写成 `"$PY" "$SK"/<文件名>.py`。
 
 装在 `~/.claude/skills/` 下是**全局生效**（在哪个目录都能用）；只想在某个项目里用，就放到那个项目的 `.claude/skills/` 下——**这种装法记得按顶部的警告，把 `$SK` 改成该项目里的实际路径**。
 
-**最后那行 `preflight.py` 别省。** 确认 `probes.ocr.ok=true`，并且报告里的解释器、
+**最后那次自检别省。** 确认 `probes.ocr.ok=true`，并且报告里的解释器、
 程序和模型路径全都在真实 Skill 目录内。`ocr/` 不进 Git，所以更新脚本不会把你本机的依赖或权重传上去。
 换了机器、或者挪了 Skill 的位置，就得重建虚拟环境——虚拟环境不是便携软件，不能直接复制过去接着用。
 
@@ -323,7 +326,7 @@ $PY = Join-Path $SK 'ocr\.venv\Scripts\python.exe'
 翻译桌面上的 example-paper.pdf
 ```
 
-流程：**1.0 环境自检** → 2.0 转 Word → 2.1 提取或预览 → **2.2 Acrobat 直转不问满意度，OCR 重建必须问；多面板图另选交叉验证** → 3.0/4.0 → 5.0 分批翻译 → 5.1 写 Markdown → 5.2 图归位 → 5.3 加目录 → 5.4 图片内嵌 → 6.0 转 PDF → 6.1 归档 → 7.0 自检。默认不保存独立图集。
+流程：**1.0 环境自检** → 2.0 转 Word → 2.1 提取或预览 → **2.2 Acrobat 直转不问满意度，OCR 重建必须问；多面板图另选交叉验证** → 3.0/4.0 → 5.0 分批翻译 → 5.1 写 Markdown → 5.2 图归位 → 5.3 加目录 → 5.4 图片内嵌 → 6.0 转 PDF → **6.0.1 图位置核验** → 6.1 归档 → 7.0 自检。默认不保存独立图集。
 
 产物都收在原 PDF 旁边一个用中文题目命名的文件夹里，原件也一起挪进去（6.1）：
 
@@ -365,15 +368,17 @@ $PY = Join-Path $SK 'ocr\.venv\Scripts\python.exe'
 
 ---
 
-## 脚本说明
+## 各步骤详解
 
-九个脚本都能脱离 Claude，单独当命令行工具使。
+每一步都是一个能脱离 Claude、单独当命令行工具使的脚本。下面按流程顺序讲每步干什么、怎么判成败。
 
-### `preflight.py` — 环境自检（1.0，第一个跑的）
+> 命令里统一用 `"$PY" "$SK"/<文件名>.py` 的形式。`<文件名>` 指真实 Skill 目录下负责这一步的那个脚本，`SKILL.md` 的流程表里对每一步都写明了是哪一个；手动跑的时候 `ls "$SK"` 看一眼就知道。
+
+### 环境自检（1.0，第一个跑的）
 
 ```bash
-"$PY" preflight.py                 # 报告 + 判定
-"$PY" preflight.py --json          # 机器可读
+"$PY" "$SK"/<文件名>.py                 # 报告 + 判定
+"$PY" "$SK"/<文件名>.py --json          # 机器可读
 ```
 
 能力只检测 Acrobat Pro 和 RapidOCR；另外会查 PyMuPDF、lxml、python-docx、Pillow、NumPy、pandoc、Chrome/Edge 等依赖，并打印**当前用的是哪个解释器**。它不启动应用、不装软件；实际导出和 OCR 能不能成，还得靠后面的命令来验证。
@@ -384,15 +389,15 @@ $PY = Join-Path $SK 'ocr\.venv\Scripts\python.exe'
 | `1` | 缺 PyMuPDF，什么都读不了 |
 | `4` | **两条路径都用不了**；必须请求用户同意安装 RapidOCR，不同意就停 |
 
-判定里有一条不太显而易见：**转换器装了、但没装 lxml，不算可用能力**——`docx_extract.py` 要靠 lxml 解析导出的 .docx，少了它，Word 路径会在下一步直接挂掉。这种情况下报告里照实显示 `ok`，但 verdict 里会标成 `UNUSABLE`。
+判定里有一条不太显而易见：**转换器装了、但没装 lxml，不算可用能力**——抽取正文那一步要靠 lxml 解析导出的 .docx，少了它，Word 路径会在下一步直接挂掉。这种情况下报告里照实显示 `ok`，但 verdict 里会标成 `UNUSABLE`。
 
-### `pdf_to_docx.py` — PDF 转 Word（2.0，首选路径）
+### PDF 转 Word（2.0，首选路径）
 
 ```bash
-"$PY" pdf_to_docx.py <pdf> [-o out.docx] [--engine auto|acrobat|rapidocr]
-                           [--layout flowing|page]
-"$PY" pdf_to_docx.py --check                 # 看本机准备好了没
-"$PY" pdf_to_docx.py --install-acrobat-js    # 一次性安装 Acrobat 受信任脚本
+"$PY" "$SK"/<文件名>.py <pdf> [-o out.docx] [--engine auto|acrobat|rapidocr]
+                                  [--layout flowing|page]
+"$PY" "$SK"/<文件名>.py --check                 # 看本机准备好了没
+"$PY" "$SK"/<文件名>.py --install-acrobat-js    # 一次性安装 Acrobat 受信任脚本
 ```
 
 `--engine auto` 先试 Acrobat，失败了只会回退到 RapidOCR。Acrobat 默认 `--layout flowing`；RapidOCR 可以用 `--ocr-lang`、`--dpi` 调识别效果。Acrobat 引擎只在 Windows 上能用；RapidOCR 不依赖 COM。成功后会写一个同名 `.conversion.json`，记下实际用了哪个引擎、需不需要确认满意度；输出文件已经存在的话，拒绝覆盖。
@@ -405,10 +410,10 @@ Acrobat 的 COM 导出跑在独立进程里，默认 180 秒超时，可以用 `
 | `2` | 选中的转换器全失败了；把能力修好再重试，不许跳过门禁 |
 | `1` | 出错 |
 
-### `docx_extract.py` — 从 Word 抽正文 + 图 + 图的位置（2.1）
+### 从 Word 抽正文 + 图 + 图的位置（2.1）
 
 ```bash
-"$PY" docx_extract.py <docx> [-o OUTDIR]
+"$PY" "$SK"/<文件名>.py <docx> [-o OUTDIR]
 ```
 
 产出 `content.md`（正文按顺序排好，图的位置用 `[[FIG 2 -> media/fig02.jpg]]` 标出来）、`content.json`、`media/`（图片按图号命名）和 `manifest.json`。
@@ -429,12 +434,12 @@ Acrobat 的 COM 导出跑在独立进程里，默认 180 秒超时，可以用 `
 
 参考文献 / 致谢 / 声明这类章节会被自动标上 `<!-- 不翻译 -->`。
 
-### `panel_split.py` — 可选：把整张图切成 a/b/c 单个面板并验证（4.0）
+### 可选：把整张图切成 a/b/c 单个面板并验证（4.0）
 
 ```bash
-"$PY" panel_split.py <figure.png> -o panels/ --layout 4,3,4,3,1 [--expect a-o]
-"$PY" panel_split.py <figure.png> -o panels/ --grid 2x2      # 强制均匀网格
-"$PY" panel_split.py <figure.png> -o panels/ --no-ocr        # 只用几何校验
+"$PY" "$SK"/<文件名>.py <figure.png> -o panels/ --layout 4,3,4,3,1 [--expect a-o]
+"$PY" "$SK"/<文件名>.py <figure.png> -o panels/ --grid 2x2      # 强制均匀网格
+"$PY" "$SK"/<文件名>.py <figure.png> -o panels/ --no-ocr        # 只用几何校验
 ```
 
 **只有用户在 2.2 选了交叉验证，才会执行 4.0。** 用户跳过的话，就保留整张图、不生成 `panels/`，把整图放到正文第一次提到它的地方。`--layout` 是每行有几个面板，得自己看图数出来。不给也能跑（自动模式），但经常数错——数错了脚本会 exit 3 明说，不会装作成功。毕竟面板行与行之间的空隙可能只有 4 px，而面板*内部*（图和刻度标签之间）的空白反倒能有 30 px，光看像素根本分不清哪条才是边界。
@@ -456,10 +461,10 @@ OCR 读不出 `i`、`l`、`o` 是常事（笔画太细），脚本会在 note �
 
 没有 RapidOCR 时，`--no-ocr` 只能做几何和墨量方面的辅助检查，称不上“图片交叉验证”。
 
-### `insert_figures.py` — 把图挪到正文第一次提到它的位置（5.2）
+### 把图挪到正文第一次提到它的位置（5.2）
 
 ```bash
-"$PY" insert_figures.py <译文.md> [--dry-run] [-o out.md]
+"$PY" "$SK"/<文件名>.py <译文.md> [--dry-run] [-o out.md]
 ```
 
 图要是全堆在文末的 `## 图` 里，读者在第 4 页读到「如图 2 所示」，就得翻到第 12 页再翻回来。脚本会把图块整块搬出来，插到第一次提到该图号的那段正文后面，并核对搬动前后的图片数量，对不上就拒绝写入。原文件会留一份 `.bak`。
@@ -468,12 +473,12 @@ OCR 读不出 `i`、`l`、`o` 是常事（笔画太细），脚本会在 note �
 
 **临时译文的路径别带圆括号。** 5.2 还得靠解析图片路径来认图号，所以 `Small (2024)` 要写成 `Small 2024`；等 5.4 成功后，最终 Markdown 里的图片会换成 `data:` 形式，就不再依赖这个路径了。
 
-> 走 Word 首选路径时，图的位置已经由 `docx_extract.py` 给出（比「首次提及」更准），这一步可以跳过；它主要是给 `extract_paper.py` 那条回退路径用的。
+> 走 Word 首选路径时，图的位置已经由上一步（抽取正文那步）给出（比「首次提及」更准），这一步可以跳过；它主要是给回退提取路径（3.0）用的。
 
-### `extract_paper.py` — 提取文本 + 图（3.0，回退路径）
+### 提取文本 + 图（3.0，回退路径）
 
 ```bash
-"$PY" extract_paper.py <pdf> [-o OUTDIR] [--dpi 200] [--max-width 1600] [--pages 21-24] [--ocr] [--ocr-lang en] [--split-panels]
+"$PY" "$SK"/<文件名>.py <pdf> [-o OUTDIR] [--dpi 200] [--max-width 1600] [--pages 21-24] [--ocr] [--ocr-lang en] [--split-panels]
 ```
 
 产出 `text.txt`、`figures/pNN.png` 和 `manifest.json`。
@@ -522,11 +527,11 @@ OK: figure count consistent with text references.
 
 留意最后两行：OCR 把文字认出来之后，**图数量交叉校验对扫描件也重新生效了**——没有文本层的时候，这个校验是做不了的。
 
-### `add_toc.py` — 给译文加「目录」块（5.3）
+### 给译文加「目录」块（5.3）
 
 ```bash
-"$PY" add_toc.py <译文.md> [--depth 3] [--include-figures] [--dry-run] [-o out.md]
-"$PY" add_toc.py <译文.md> --remove
+"$PY" "$SK"/<文件名>.py <译文.md> [--depth 3] [--include-figures] [--dry-run] [-o out.md]
+"$PY" "$SK"/<文件名>.py <译文.md> --remove
 ```
 
 一篇 24 页的译文，用纯文本编辑器打开是没有任何导航的。脚本会在第一个 `##` 章节前面插入一个用 HTML 注释圈起来的块：
@@ -541,28 +546,28 @@ OK: figure count consistent with text references.
 <!-- /TOC -->
 ```
 
-- **要在 `insert_figures.py` 之后再跑**：归位会搬动图块、删掉空出来的 `## 图` 小节，先加目录的话，会留下一份对不上的旧目录
+- **要在归位那步之后再跑**：归位会搬动图块、删掉空出来的 `## 图` 小节，先加目录的话，会留下一份对不上的旧目录
 - 锚点按 github-slugger 规则计算（小写、去掉标点和符号、空格转 `-`、中文原样保留、重名加 `-1`），GitHub / VS Code 预览 / Obsidian 里都点得动
 - **`### 图 N` 默认不列进去**——十几张图会把真正的章节淹没；想要就加 `--include-figures`
 - 幂等：反复跑只会刷新那一块，不会叠加，也不会多出空行；`--remove` 之后能逐字节还原
-- 写入用 LF，原文件留 `.bak`，跟 `insert_figures.py` 一个做法
+- 写入用 LF，原文件留 `.bak`，跟归位那步一个做法
 - 退出码 `3` = 一个 `##` 都没找到——正常的译文不该长这样，回头去查
 
-> PDF 的目录由 `md_to_pdf.py` 自己生成，所以它会先把这个块剥掉再渲染——不会出现两个目录同时在场的情况。
+> PDF 的目录由转 PDF 那步自己生成，所以它会先把这个块剥掉再渲染——不会出现两个目录同时在场的情况。
 
-### `inline_images.py` — 把图片内嵌进 Markdown（5.4）
+### 把图片内嵌进 Markdown（5.4）
 
 ```bash
-"$PY" inline_images.py <译文.md>
+"$PY" "$SK"/<文件名>.py <译文.md>
 ```
 
-5.2 归位完成后再跑。脚本把本地的 `![...](路径)` 改写成 `![...](data:image/...;base64,...)`，正文位置和图注都保持原样，并留一份 `.bak`。成功之后，Markdown 就不再依赖同级的图片目录了；等确认 5.4 和 6.0 都成功，进入 6.1 归档，再按那里的清理规则处理临时的 `panels/`、`_figs/`、`media/`，以及本次流程产生的 `.bak`。退出码 `3` 表示有图片缺失或者是远程图片，这种状态不能直接交付。
+归位完成后再跑。脚本把本地的 `![...](路径)` 改写成 `![...](data:image/...;base64,...)`，正文位置和图注都保持原样，并留一份 `.bak`。成功之后，Markdown 就不再依赖同级的图片目录了；等确认这步和转 PDF 那步都成功，进入归档，再按那里的清理规则处理临时的 `panels/`、`_figs/`、`media/`，以及本次流程产生的 `.bak`。退出码 `3` 表示有图片缺失或者是远程图片，这种状态不能直接交付。
 
-### `md_to_pdf.py` — Markdown 转 PDF（6.0）
+### Markdown 转 PDF（6.0）
 
 ```bash
-"$PY" md_to_pdf.py <input.md> [-o out.pdf] [--font serif|sans] [--keep-html]
-                    [--no-toc] [--toc-depth 3]
+"$PY" "$SK"/<文件名>.py <input.md> [-o out.pdf] [--font serif|sans] [--keep-html]
+                                 [--no-toc] [--toc-depth 3]
 ```
 
 pandoc → 自包含 HTML（图片转成 data URI）→ Chrome/Edge 无头打印。
@@ -591,6 +596,51 @@ pandoc → 自包含 HTML（图片转成 data URI）→ Chrome/Edge 无头打印
 - 书签树**包含** `图 N` 标题（方便直接跳到图），目录页**不包含**（不然图注标题会把目录灌满）
 - `--toc-depth 2` 只列到 `##`；`--no-toc` 两个一起关
 - 最后会报出 `toc : N entries` 和 `outline : N bookmarks`；看到 `outline: NONE`，说明这个浏览器不认那个开关——目录页还在，但没有书签树
+
+### 核验译文里的图还在不在原文那个位置（6.0.1）
+
+```bash
+"$PY" "$SK"/<文件名>.py <原文.pdf> --md <译文.md> [--pdf <译文.pdf>]
+                                  [--render-dir <dir>] [--json]
+```
+
+归位那步把图搬到了正文第一次提到它的地方，**但搬完之后一直没人核对过搬对了没有**。它只拦得住「一张图压根没找到提及」；图落到了错误的章节下、图号对不上、先后顺序整体错乱，它一律静默放行。完成前自检里那条「图紧跟提到它的正文」纯靠人眼，背后没有任何脚本证据。这步就是来补这个缺口的。
+
+判据是**上下文一致**，不是页码一致。译文重新排版之后页数必然变（中文比英文短、字体不同、图被重新归位），要求逐页对齐既不现实也没意义——真要做得把 6.0 那套排版整体重写成按页对齐。
+
+**脚本判死的，模型判活的：**
+
+| 谁 | 判什么 |
+|---|---|
+| 脚本 | 图号集合、先后顺序；对不上就退出码 `3` |
+| 模型 | 对照表里每个图号，原文的章节和译文的章节是不是同一部分（`Results and Discussion` ↔ `结果与讨论`）|
+| 模型（多模态）| 看 `--render-dir` 渲染出来的双方页面，逐图确认图和图注配对、图的内容没串位 |
+
+因为原文是英文标题、译文是中文标题，字符串比对解决不了语义那一层，所以这张表是**打印出来给模型读的**，不是脚本自己下结论。
+
+```
+figure | source                                     | translation
+-------+--------------------------------------------+-----------------------------------
+  1    | p.2  2. Results and Discussion             | p.2  2. 结果与讨论
+  2    | p.3  2. Results and Discussion             | p.3  2. 结果与讨论
+  3    | p.4  3. Methods                            | p.4  3. 方法
+```
+
+页码只作参考，**要比的是章节那一列**。原文锚点取「图注所在的位置」而不是图片本身——期刊常把图注集中排一页、图放在后面几页，而图号和图所属的章节这些信息都在图注上（跟 2.1.1 的整图核验用的是同一套约定）。
+
+| 退出码 | 含义 |
+|---|---|
+| `0` | 图号和顺序都对上了，接着读对照表判章节语义 |
+| `3` | 有图缺失、多余或者串位——回去查 5.2 的归位结果，别继续 |
+| `1` | 出错（文件不存在，或者 `--render-dir` 没配 `--pdf`）|
+
+译文的页码显示成 `p.?`，说明没能定位到，看 `NOTE` 行给的原因：PDF 里的图片数跟脚本从 Markdown 里数出来的对不上时（`.md` 在 6.0 之后又改过，或者 PDF 是旧的），脚本就放弃按顺序映射，退回去搜图注文字。
+
+**当前模型是不是多模态，看会话里声明的模型名。** 这个判断不可靠——走代理或者中转的时候，声明的名字跟真实后端可能对不上；拿不准就按非多模态处理。非多模态时脚本的硬判据和对照表照跑、语义比对照做，**只是少了视觉那一层**，这不是失败，但交付说明里得写明「未做视觉核验」，不能把降级说成已验证。
+
+这一步**不替代 4.0 的面板交叉验证**，也不改变它的执行条件：4.0 管的是「一张图切得对不对」，只在 2.2 用户选了验证时才跑；这里管的是「图放的位置对不对」，有图就跑。
+
+> 原需求是「在图片交叉验证那项加一步」，但 4.0 发生在翻译之前，那时候译文还不存在，没法对比——所以它才成了 6.0.1 这个独立步骤。
 
 ---
 
@@ -633,7 +683,7 @@ Markdown 输出借助 pandoc 的 `implicit_figures`，把图和图注编译成�
 - **字体依赖系统里已经装的字体**：宋体/黑体用 SimSun/SimHei（Windows 自带），macOS 用 Songti SC / Heiti SC，Linux 需要思源或 Noto CJK；都没有就回退到系统默认，中文可能换成另一种字形。拉丁部分要 Times New Roman，缺了就回退到 Liberation Serif
 - **PDF 目录页点不了**：Chrome 的 print-to-PDF 不会把 `<a href="#...">` 转成 PDF 链接注释（实测 kind==1 的链接是 0 个）。所以 PDF 里的跳转靠侧边栏书签树，目录页只是一份印出来的清单。想要能点的目录，就得换 LaTeX / Prince 这类排版后端——那就得装 LaTeX，跟本项目「不需要 LaTeX」的前提冲突
 - **md 目录的锚点按 github-slugger 规则计算**，GitHub / VS Code / Obsidian 通用；换成用别的 slug 规则的渲染器（部分静态站点生成器），可能就点不动了
-- `pdf_to_docx.py` 的 Acrobat 引擎依赖 Windows COM；RapidOCR 重建和其余脚本都跨平台
+- 转 Word 那步的 Acrobat 引擎依赖 Windows COM；RapidOCR 重建和其余步骤都跨平台
 - 主要在 Windows 11 + Python 3.13 上验证过；macOS / Linux 的路径已经适配，但没在真机上测过
 
 ---
